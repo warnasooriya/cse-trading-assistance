@@ -5,8 +5,17 @@ const BACKTESTING_BASE_URL = import.meta.env.VITE_BACKTESTING_BASE_URL as string
 export type BacktestRequest = {
   stock_symbol: string;
   initial_capital: number;
+  strategy?: "SMA_CROSSOVER" | "RSI_REVERSION";
   fast_period: number;
   slow_period: number;
+  rsi_period?: number;
+  rsi_oversold?: number;
+  rsi_overbought?: number;
+  position_size_pct?: number;
+  slippage_bps?: number;
+  fee_mode?: "BOTH" | "SELL_ONLY" | "BUY_ONLY" | "NONE";
+  buy_fee_rate_pct?: number;
+  sell_fee_rate_pct?: number;
   candles: Array<{
     time: string;
     close: number;
@@ -26,6 +35,8 @@ export type BacktestResponse = {
     profit_factor: number;
     sharpe_ratio: number;
     max_drawdown: number;
+    total_fees?: number;
+    trade_count?: number;
   };
   trades: Array<{
     entry_time: string;
@@ -33,6 +44,8 @@ export type BacktestResponse = {
     entry_price: number;
     exit_price: number;
     shares: number;
+    entry_fees?: number;
+    exit_fees?: number;
     pnl: number;
     return_pct: number;
   }>;
@@ -68,4 +81,3 @@ export async function runBacktest(payload: BacktestRequest): Promise<BacktestRes
 }
 
 export const backtestingApi = { runBacktest, getJson: httpClient.getJson };
-

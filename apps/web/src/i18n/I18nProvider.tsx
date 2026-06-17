@@ -57,7 +57,7 @@ const translations: Record<AppLanguage, TranslationTree> = {
       stockAnalysis: "Stock Analysis",
       newsSentiment: "News & Sentiment",
       portfolioRisk: "Portfolio & Risk",
-      portfolioCommand: "Portfolio Command",
+      portfolioCommand: "Portfolio",
       riskCenter: "Risk Center",
       alerts: "Alerts",
       strategyLab: "Strategy Lab",

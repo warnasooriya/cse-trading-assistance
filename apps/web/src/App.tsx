@@ -64,7 +64,14 @@ export default function App() {
           }
         />
         <Route path="/news" element={<NewsSentimentPage />} />
-        <Route path="/backtests" element={<BacktestPage />} />
+        <Route
+          path="/backtests"
+          element={
+            <RequireAuth feature="Backtesting">
+              <BacktestPage />
+            </RequireAuth>
+          }
+        />
         <Route
           path="/profit-simulator"
           element={
