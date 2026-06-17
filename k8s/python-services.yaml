@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: technical-analysis-service
+  namespace: cse-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: technical-analysis-service
+  template:
+    metadata:
+      labels:
+        app: technical-analysis-service
+    spec:
+      containers:
+        - name: technical-analysis-service
+          image: ghcr.io/example/cse-ai/technical-analysis-service:latest
+          ports:
+            - containerPort: 8091
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: technical-analysis-service
+  namespace: cse-ai
+spec:
+  selector:
+    app: technical-analysis-service
+  ports:
+    - port: 8091
+      targetPort: 8091
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-prediction-service
+  namespace: cse-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-prediction-service
+  template:
+    metadata:
+      labels:
+        app: ai-prediction-service
+    spec:
+      containers:
+        - name: ai-prediction-service
+          image: ghcr.io/example/cse-ai/ai-prediction-service:latest
+          ports:
+            - containerPort: 8092
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-prediction-service
+  namespace: cse-ai
+spec:
+  selector:
+    app: ai-prediction-service
+  ports:
+    - port: 8092
+      targetPort: 8092
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backtesting-service
+  namespace: cse-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backtesting-service
+  template:
+    metadata:
+      labels:
+        app: backtesting-service
+    spec:
+      containers:
+        - name: backtesting-service
+          image: ghcr.io/example/cse-ai/backtesting-service:latest
+          ports:
+            - containerPort: 8093
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backtesting-service
+  namespace: cse-ai
+spec:
+  selector:
+    app: backtesting-service
+  ports:
+    - port: 8093
+      targetPort: 8093
+
