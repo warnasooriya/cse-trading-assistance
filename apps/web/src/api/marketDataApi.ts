@@ -56,6 +56,8 @@ export type AlertsApiItem = {
   channel: "Email" | "SMS" | "Push";
   status: "Active" | "Paused";
   trigger: string;
+  destination?: string;
+  lastTriggeredAt?: string | null;
 };
 
 export type PortfolioHolding = {
@@ -130,6 +132,11 @@ export type NewsItem = {
   link: string;
   pubDate: string | null;
   source: string | null;
+  summary?: string;
+  sentiment?: "Positive" | "Neutral" | "Negative";
+  sentimentScore?: number;
+  symbols?: string[];
+  keywords?: string[];
 };
 
 export type NewsResponse = {
@@ -153,6 +160,69 @@ export type AuthResponse = {
 
 export type WatchlistItem = { symbol: string; name: string };
 export type Watchlist = { id: string; name: string; items: WatchlistItem[] };
+export type BrokerAccountResponse = {
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  cashBalance: number;
+  currency: string;
+  linkedAccounts?: Array<{ id: string; provider: string; account_name: string; account_number: string; is_default: boolean; updated_at: string }>;
+  recentOrders: Array<{
+    id: string;
+    symbol: string;
+    side: "BUY" | "SELL";
+    order_type: "MARKET" | "LIMIT" | "STOP";
+    quantity: number | string;
+    requested_price: number | string | null;
+    executed_price: number | string | null;
+    fees: number | string;
+    status: string;
+    placed_at: string;
+    executed_at: string | null;
+  }>;
+};
+
+export type AlertDeliveryItem = {
+  id: string;
+  type: AlertsApiItem["type"];
+  symbol: string;
+  channel: AlertsApiItem["channel"];
+  destination: string;
+  status: string;
+  message: string;
+  provider: string;
+  triggeredAt: string;
+};
+
+export type PortfolioCopilotResponse = {
+  summary: string;
+  portfolioHealth: "Strong" | "Balanced" | "Cautious";
+  addIdeas: string[];
+  reduceIdeas: string[];
+  rebalanceActions: string[];
+  riskAlerts: string[];
+};
+
+export type BrokerPreviewResponse = {
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT" | "STOP";
+  executionPrice: number;
+  grossAmount: number;
+  fees: number;
+  netAmount: number;
+  feeRatePct: number;
+};
+
+export type BrokerOrderResponse = {
+  id: string;
+  brokerOrderId: string;
+  status: string;
+  executionPrice: number;
+  grossAmount: number;
+  fees: number;
+  netAmount: number;
+};
 
 function requireBaseUrl(): string {
   if (!MARKET_DATA_BASE_URL) {
@@ -276,12 +346,25 @@ export async function createAlert(payload: {
   symbol: string;
   channel: AlertsApiItem["channel"];
   trigger: string;
+  destination?: string;
 }): Promise<{ id: string }> {
   const base = requireBaseUrl();
   return httpClient.requestJson<{ id: string }>(`${base}/api/alerts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchAlertDeliveries(): Promise<AlertDeliveryItem[]> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<AlertDeliveryItem[]>(`${base}/api/alerts/deliveries`);
+}
+
+export async function evaluateAlerts(): Promise<{ evaluated: number; deliveries: Array<{ id: string; message: string; channel: AlertsApiItem["channel"]; symbol: string }> }> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson(`${base}/api/alerts/evaluate`, {
+    method: "POST"
   });
 }
 
@@ -304,6 +387,11 @@ export async function fetchPortfolio(): Promise<PortfolioResponse> {
   return httpClient.getJson<PortfolioResponse>(`${base}/api/portfolio`);
 }
 
+export async function fetchPortfolioCopilot(): Promise<PortfolioCopilotResponse> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<PortfolioCopilotResponse>(`${base}/api/portfolio/copilot`);
+}
+
 export async function upsertPortfolioHolding(payload: {
   symbol: string;
   name?: string;
@@ -324,4 +412,126 @@ export async function upsertPortfolioHolding(payload: {
 export async function deletePortfolioHolding(symbol: string): Promise<void> {
   const base = requireBaseUrl();
   await httpClient.requestJson<void>(`${base}/api/portfolio/holdings/${encodeURIComponent(symbol)}`, { method: "DELETE" });
+}
+
+export async function fetchBrokerAccount(): Promise<BrokerAccountResponse> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<BrokerAccountResponse>(`${base}/api/broker/account`);
+}
+
+export async function previewBrokerOrder(payload: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT" | "STOP";
+  quantity: number;
+  limitPrice?: number;
+  stopPrice?: number;
+}): Promise<BrokerPreviewResponse> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson<BrokerPreviewResponse>(`${base}/api/broker/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function placeBrokerOrder(payload: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT" | "STOP";
+  quantity: number;
+  provider?: string;
+  limitPrice?: number;
+  stopPrice?: number;
+}): Promise<BrokerOrderResponse> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson<BrokerOrderResponse>(`${base}/api/broker/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export type RiskLimits = {
+  id: string;
+  userId: string;
+  maxPositionPctOfPortfolio: number;
+  maxPortfolioExposurePct: number;
+  maxDailyLossPct: number;
+  maxOpenPositions: number;
+  defaultStopLossPct: number;
+  defaultTakeProfitPct: number;
+  tradingHalted: boolean;
+  tradingHaltedReason: string | null;
+  tradingHaltedAt: string | null;
+};
+
+export type RiskStatus = {
+  limits: RiskLimits;
+  portfolioValue: number;
+  investedValue: number;
+  exposurePct: number;
+  largestPositionPct: number;
+  openPositions: number;
+  dailyPnlPct: number;
+};
+
+export type RiskEvent = {
+  id: string;
+  event_type: string;
+  symbol: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export async function fetchRiskStatus(): Promise<RiskStatus> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<RiskStatus>(`${base}/api/risk/status`);
+}
+
+export async function fetchRiskLimits(): Promise<RiskLimits> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<RiskLimits>(`${base}/api/risk/limits`);
+}
+
+export async function updateRiskLimits(payload: Partial<{
+  maxPositionPctOfPortfolio: number;
+  maxPortfolioExposurePct: number;
+  maxDailyLossPct: number;
+  maxOpenPositions: number;
+  defaultStopLossPct: number;
+  defaultTakeProfitPct: number;
+}>): Promise<RiskLimits> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson<RiskLimits>(`${base}/api/risk/limits`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchRiskEvents(): Promise<RiskEvent[]> {
+  const base = requireBaseUrl();
+  return httpClient.getJson<RiskEvent[]>(`${base}/api/risk/events`);
+}
+
+export async function resetRiskKillSwitch(): Promise<RiskLimits> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson<RiskLimits>(`${base}/api/risk/kill-switch/reset`, { method: "POST" });
+}
+
+export async function linkBrokerAccount(payload: {
+  provider: string;
+  accountName: string;
+  accountNumber: string;
+  endpoint: string;
+  apiKey?: string;
+  isDefault?: boolean;
+}): Promise<{ id: string; provider: string }> {
+  const base = requireBaseUrl();
+  return httpClient.requestJson(`${base}/api/broker/account/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
