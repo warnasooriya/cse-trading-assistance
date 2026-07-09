@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Autocomplete,
@@ -11,6 +11,7 @@ import {
   CircularProgress,
   Divider,
   Grid,
+  MenuItem,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
@@ -26,8 +27,8 @@ import {
 } from "@mui/material";
 import { useSearchParams } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from "recharts";
-import { fetchStockHistory, fetchStockQuote, fetchStockRecommendation } from "../api/stockApi";
-import { fetchMarketWatch, type MarketWatchItem } from "../api/marketDataApi";
+import { fetchStockCopilot, fetchStockHistory, fetchStockIndicators, fetchStockQuote, fetchStockRecommendation } from "../api/stockApi";
+import { fetchBrokerAccount, fetchMarketWatch, placeBrokerOrder, previewBrokerOrder, type MarketWatchItem } from "../api/marketDataApi";
 import { useI18n } from "../i18n/I18nProvider";
 
 function toNumber(value: number | string | undefined): number | null {
@@ -53,6 +54,10 @@ export function StockAnalysisPage() {
   const [timeRange, setTimeRange] = useState("1M");
   const [plannerCapital, setPlannerCapital] = useState(250_000);
   const [plannerRiskPct, setPlannerRiskPct] = useState(2);
+  const [orderSide, setOrderSide] = useState<"BUY" | "SELL">("BUY");
+  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT" | "STOP">("MARKET");
+  const [orderQuantity, setOrderQuantity] = useState(100);
+  const [orderPrice, setOrderPrice] = useState<number | "">("");
 
   useEffect(() => {
     const nextSymbol = searchParams.get("symbol")?.toUpperCase();
@@ -91,6 +96,53 @@ export function StockAnalysisPage() {
     queryFn: () => fetchStockHistory(symbol, timeRange as "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y")
   });
 
+  const indicatorsQuery = useQuery({
+    queryKey: ["stock", "indicators", symbol, timeRange],
+    queryFn: () => fetchStockIndicators(symbol, timeRange as "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y"),
+    retry: false
+  });
+
+  const copilotQuery = useQuery({
+    queryKey: ["stock", "copilot", symbol, timeRange],
+    queryFn: () => fetchStockCopilot(symbol, timeRange as "1D" | "1W" | "1M" | "3M" | "6M" | "1Y" | "5Y"),
+    retry: false
+  });
+
+  const brokerAccountQuery = useQuery({
+    queryKey: ["broker", "account"],
+    queryFn: () => fetchBrokerAccount(),
+    retry: false
+  });
+
+  const orderPreviewMutation = useMutation({
+    mutationFn: () =>
+      previewBrokerOrder({
+        symbol,
+        side: orderSide,
+        type: orderType,
+        quantity: orderQuantity,
+        ...(orderType === "LIMIT" ? { limitPrice: Number(orderPrice) } : {}),
+        ...(orderType === "STOP" ? { stopPrice: Number(orderPrice) } : {})
+      })
+  });
+
+  const orderPlacementMutation = useMutation({
+    mutationFn: () =>
+      placeBrokerOrder({
+        symbol,
+        side: orderSide,
+        type: orderType,
+        quantity: orderQuantity,
+        ...(orderType === "LIMIT" ? { limitPrice: Number(orderPrice) } : {}),
+        ...(orderType === "STOP" ? { stopPrice: Number(orderPrice) } : {})
+      }),
+    onSuccess: () => {
+      void brokerAccountQuery.refetch();
+      void quoteQuery.refetch();
+      void recommendationQuery.refetch();
+    }
+  });
+
   const quote = quoteQuery.data?.reqSymbolInfo;
   const changePct = useMemo(() => toNumber(quote?.changePercentage), [quote?.changePercentage]);
   const lastPrice = toNumber(quote?.lastTradedPrice);
@@ -117,6 +169,8 @@ export function StockAnalysisPage() {
     });
   }, [lastPrice]);
   const recommendation = recommendationQuery.data;
+  const indicators = indicatorsQuery.data?.indicators;
+  const copilot = copilotQuery.data?.copilot;
   const companyOptions = companyLookupQuery.data?.items ?? [];
   const currentCompanyName = selectedCompany?.name ?? quote?.name ?? symbol;
   const historyCloses = useMemo(() => {
@@ -279,10 +333,10 @@ export function StockAnalysisPage() {
   }, [aiTradePlan, lastPrice, recommendation?.confidence]);
 
   const indicatorScores = [
-    { label: "RSI", value: recommendation?.action === "BUY" ? 72 : recommendation?.action === "SELL" ? 28 : 51 },
-    { label: "MACD", value: recommendation?.action === "BUY" ? 78 : recommendation?.action === "SELL" ? 34 : 52 },
-    { label: "EMA Trend", value: recommendation?.action === "BUY" ? 69 : recommendation?.action === "SELL" ? 39 : 50 },
-    { label: "Volume", value: recommendation?.action === "BUY" ? 74 : recommendation?.action === "SELL" ? 45 : 53 }
+    { label: "RSI", value: Math.round(clamp(indicators?.rsi_14 ?? 50, 0, 100)) },
+    { label: "MACD", value: indicators?.macd_hist !== undefined && indicators?.macd_hist !== null ? (indicators.macd_hist >= 0 ? 72 : 34) : 50 },
+    { label: "EMA Trend", value: indicators?.ema_12 !== undefined && indicators?.ema_26 !== undefined && indicators?.ema_12 !== null && indicators?.ema_26 !== null ? (indicators.ema_12 >= indicators.ema_26 ? 70 : 35) : 50 },
+    { label: "Stochastic", value: Math.round(clamp(indicators?.stoch_k ?? 50, 0, 100)) }
   ];
 
   const applySelection = () => {
@@ -673,6 +727,160 @@ export function StockAnalysisPage() {
           </CardContent>
         </Card>
       )}
+
+      {copilot && (
+        <Card>
+          <CardContent>
+            <Stack direction={{ xs: "column", lg: "row" }} justifyContent="space-between" gap={2}>
+              <Box>
+                <Typography variant="h6">Gemini Trading Copilot</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Natural-language trading guidance generated from current recommendation, structure, and technical indicators.
+                </Typography>
+              </Box>
+              <Chip label={`Copilot Range ${copilotQuery.data?.range ?? timeRange}`} variant="outlined" />
+            </Stack>
+            <Divider sx={{ my: 2 }} />
+            <Alert severity="info">{copilot.summary}</Alert>
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              {[
+                { label: "Entry Guidance", items: copilot.entryPlan },
+                { label: "Exit Guidance", items: copilot.exitPlan },
+                { label: "Risk Controls", items: copilot.risks },
+                { label: "Next Actions", items: copilot.actionItems }
+              ].map(({ label, items }) => (
+                <Grid item xs={12} md={6} key={label}>
+                  <Box sx={{ p: 2, borderRadius: 3, bgcolor: "rgba(255,255,255,0.02)", height: "100%" }}>
+                    <Typography variant="subtitle1">{label}</Typography>
+                    <Stack gap={1} sx={{ mt: 1.25 }}>
+                      {(items as string[]).map((item) => (
+                        <Typography key={item} variant="body2" color="text.secondary">
+                          - {item}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Box>
+                </Grid>
+              ))}
+            </Grid>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 2 }}>
+              {copilot.confidenceNote}
+            </Typography>
+          </CardContent>
+        </Card>
+      )}
+
+      <Grid container spacing={2}>
+        <Grid item xs={12} lg={5}>
+          <Card sx={{ height: "100%" }}>
+            <CardContent>
+              <Typography variant="h6">Paper Broker Execution</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Execute simulated trades directly from analysis and sync them to portfolio holdings and order history.
+              </Typography>
+              <Divider sx={{ my: 2 }} />
+              {brokerAccountQuery.data && (
+                <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 2 }}>
+                  <Chip label={`Cash ${brokerAccountQuery.data.cashBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}`} />
+                  <Chip label={brokerAccountQuery.data.accountNumber} variant="outlined" />
+                </Stack>
+              )}
+              {brokerAccountQuery.error && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {String((brokerAccountQuery.error as Error).message)}
+                </Alert>
+              )}
+              <Stack gap={2}>
+                <ToggleButtonGroup exclusive value={orderSide} onChange={(_, value) => value && setOrderSide(value)} size="small">
+                  <ToggleButton value="BUY">Buy</ToggleButton>
+                  <ToggleButton value="SELL">Sell</ToggleButton>
+                </ToggleButtonGroup>
+                <TextField select label="Order Type" value={orderType} onChange={(event) => setOrderType(event.target.value as "MARKET" | "LIMIT" | "STOP")}>
+                  <MenuItem value="MARKET">Market</MenuItem>
+                  <MenuItem value="LIMIT">Limit</MenuItem>
+                  <MenuItem value="STOP">Stop</MenuItem>
+                </TextField>
+                <TextField label="Quantity" type="number" value={orderQuantity} onChange={(event) => setOrderQuantity(Number(event.target.value))} />
+                {orderType !== "MARKET" && (
+                  <TextField
+                    label={orderType === "LIMIT" ? "Limit Price" : "Stop Price"}
+                    type="number"
+                    value={orderPrice}
+                    onChange={(event) => setOrderPrice(event.target.value === "" ? "" : Number(event.target.value))}
+                  />
+                )}
+                <Stack direction={{ xs: "column", sm: "row" }} gap={1}>
+                  <Button
+                    variant="outlined"
+                    onClick={() => orderPreviewMutation.mutate()}
+                    disabled={orderType !== "MARKET" && orderPrice === ""}
+                  >
+                    Preview Order
+                  </Button>
+                  <Button
+                    variant="contained"
+                    onClick={() => orderPlacementMutation.mutate()}
+                    disabled={orderPlacementMutation.isPending || (orderType !== "MARKET" && orderPrice === "")}
+                  >
+                    Execute Paper Order
+                  </Button>
+                </Stack>
+                {orderPreviewMutation.data && (
+                  <Alert severity="info">
+                    {orderPreviewMutation.data.side} {orderQuantity} @ {orderPreviewMutation.data.executionPrice.toFixed(2)} |
+                    Gross {orderPreviewMutation.data.grossAmount.toFixed(2)} | Fees {orderPreviewMutation.data.fees.toFixed(2)} |
+                    Net {orderPreviewMutation.data.netAmount.toFixed(2)}
+                  </Alert>
+                )}
+                {orderPlacementMutation.data && (
+                  <Alert severity="success">
+                    Order filled at {orderPlacementMutation.data.executionPrice.toFixed(2)}. Broker order ID: {orderPlacementMutation.data.brokerOrderId}
+                  </Alert>
+                )}
+                {orderPlacementMutation.error && (
+                  <Alert severity="error">{String((orderPlacementMutation.error as Error).message)}</Alert>
+                )}
+              </Stack>
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid item xs={12} lg={7}>
+          <Card sx={{ height: "100%" }}>
+            <CardContent>
+              <Typography variant="h6">Live Technical Indicators</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Calculated through the technical-analysis service and refreshed for the selected timeframe.
+              </Typography>
+              <Divider sx={{ my: 2 }} />
+              {indicatorsQuery.error ? (
+                <Alert severity="warning">{String((indicatorsQuery.error as Error).message)}</Alert>
+              ) : (
+                <Grid container spacing={2}>
+                  {[
+                    ["RSI 14", indicators?.rsi_14],
+                    ["MACD", indicators?.macd],
+                    ["MACD Signal", indicators?.macd_signal],
+                    ["EMA 12", indicators?.ema_12],
+                    ["EMA 26", indicators?.ema_26],
+                    ["ATR 14", indicators?.atr_14]
+                  ].map(([label, value]) => (
+                    <Grid item xs={12} sm={6} md={4} key={label}>
+                      <Box sx={{ p: 2, borderRadius: 3, bgcolor: "rgba(255,255,255,0.02)", height: "100%" }}>
+                        <Typography variant="body2" color="text.secondary">
+                          {label}
+                        </Typography>
+                        <Typography variant="h6" sx={{ mt: 0.5 }}>
+                          {typeof value === "number" ? value.toFixed(2) : "—"}
+                        </Typography>
+                      </Box>
+                    </Grid>
+                  ))}
+                </Grid>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={7}>

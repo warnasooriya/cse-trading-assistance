@@ -40,8 +40,8 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { runBacktest } from "../api/backtestingApi";
-import type { BacktestResponse } from "../api/backtestingApi";
+import { deleteSavedBacktest, fetchSavedBacktests, runBacktest, saveBacktestRun } from "../api/backtestingApi";
+import type { BacktestResponse, SavedBacktestRun } from "../api/backtestingApi";
 import { fetchMarketWatch } from "../api/marketDataApi";
 import type { MarketWatchItem } from "../api/marketDataApi";
 import { fetchStockHistory } from "../api/stockApi";
@@ -61,6 +61,21 @@ type AutoSimulationCandidate = {
   rsiOversold?: number;
   rsiOverbought?: number;
 };
+
+function mapSavedRunToBacktest(run: SavedBacktestRun): BacktestResponse {
+  const params = run.parameters as Record<string, unknown>;
+  return {
+    stock_symbol: typeof params.stock_symbol === "string" ? params.stock_symbol : "UNKNOWN",
+    strategy: {
+      name: typeof params.strategy === "string" ? params.strategy : "SAVED_RUN",
+      fast_period: typeof params.fast_period === "number" ? params.fast_period : 0,
+      slow_period: typeof params.slow_period === "number" ? params.slow_period : 0
+    },
+    metrics: run.metrics,
+    trades: run.trades,
+    equity_curve: run.equity_curve
+  };
+}
 
 function toCsv(rows: Array<Record<string, string | number | null | undefined>>): string {
   if (!rows.length) return "";
@@ -290,6 +305,7 @@ export function BacktestPage() {
   const [sellFeeRatePct, setSellFeeRatePct] = useState(1.12);
   const [slippageBps, setSlippageBps] = useState(0);
   const [positionSizePct, setPositionSizePct] = useState(100);
+  const [saveName, setSaveName] = useState("");
 
   const companyLookupQuery = useQuery({
     queryKey: ["market", "watch", "lookup", "backtest", companySearch],
@@ -309,6 +325,11 @@ export function BacktestPage() {
     queryFn: () => fetchStockHistory(symbol, range),
     enabled: Boolean(symbol),
     staleTime: 30_000
+  });
+
+  const savedRunsQuery = useQuery({
+    queryKey: ["backtests", "saved"],
+    queryFn: fetchSavedBacktests
   });
 
   const candles = useMemo(() => {
@@ -396,6 +417,49 @@ export function BacktestPage() {
       setDisplayResult(data);
       setAutoCandidates([]);
       setResultsTab("overview");
+    }
+  });
+
+  const saveRunMutation = useMutation({
+    mutationFn: async () => {
+      if (!displayResult) throw new Error("Run a simulation before saving");
+      const startedAt = candles[0]?.time ?? new Date().toISOString();
+      const endedAt = candles[candles.length - 1]?.time ?? new Date().toISOString();
+      return saveBacktestRun({
+        name: saveName.trim() || strategyLabel,
+        startedAt,
+        endedAt,
+        parameters: {
+          stock_symbol: symbol,
+          range,
+          strategy,
+          fast_period: fastPeriod,
+          slow_period: slowPeriod,
+          rsi_period: rsiPeriod,
+          rsi_oversold: rsiOversold,
+          rsi_overbought: rsiOverbought,
+          fee_mode: feeMode,
+          buy_fee_rate_pct: buyFeeRatePct,
+          sell_fee_rate_pct: sellFeeRatePct,
+          slippage_bps: slippageBps,
+          position_size_pct: positionSizePct,
+          initial_capital: capital
+        },
+        metrics: displayResult.metrics,
+        equityCurve: displayResult.equity_curve,
+        trades: displayResult.trades
+      });
+    },
+    onSuccess: () => {
+      setSaveName("");
+      void savedRunsQuery.refetch();
+    }
+  });
+
+  const deleteRunMutation = useMutation({
+    mutationFn: deleteSavedBacktest,
+    onSuccess: () => {
+      void savedRunsQuery.refetch();
     }
   });
 
@@ -963,24 +1027,72 @@ export function BacktestPage() {
                 <Chip label={strategyLabel} variant="outlined" />
               </Stack>
               {!displayResult && (
-                <Box
-                  sx={{
-                    mt: 3,
-                    minHeight: 360,
-                    borderRadius: 5,
-                    display: "grid",
-                    placeItems: "center",
-                    bgcolor: "rgba(255,255,255,0.02)",
-                    border: "1px dashed rgba(164,186,223,0.12)"
-                  }}
-                >
-                  <Typography color="text.secondary">
-                    Complete the guided setup and run a simulation to view returns, drawdown, fees, equity curve, and trade details.
-                  </Typography>
-                </Box>
+                <Stack gap={2.5} sx={{ mt: 3 }}>
+                  <Box
+                    sx={{
+                      minHeight: 220,
+                      borderRadius: 5,
+                      display: "grid",
+                      placeItems: "center",
+                      bgcolor: "rgba(255,255,255,0.02)",
+                      border: "1px dashed rgba(164,186,223,0.12)"
+                    }}
+                  >
+                    <Typography color="text.secondary" sx={{ px: 2, textAlign: "center" }}>
+                      Complete the guided setup and run a simulation to view returns, drawdown, fees, equity curve, and trade details.
+                    </Typography>
+                  </Box>
+                  {(savedRunsQuery.data?.length ?? 0) > 0 && (
+                    <Card>
+                      <CardContent>
+                        <Typography variant="subtitle1">Recent Saved Runs</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Load a previously saved simulation without re-running the strategy.
+                        </Typography>
+                        <Divider sx={{ my: 2 }} />
+                        <Stack gap={1.25}>
+                          {savedRunsQuery.data!.slice(0, 5).map((run) => (
+                            <Stack key={run.id} direction={{ xs: "column", sm: "row" }} justifyContent="space-between" gap={1.5}>
+                              <Box>
+                                <Typography variant="subtitle2">{run.name}</Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                  Return {(run.metrics.total_return * 100).toFixed(2)}% | Saved {new Date(run.created_at).toLocaleString()}
+                                </Typography>
+                              </Box>
+                              <Button
+                                variant="outlined"
+                                onClick={() => {
+                                  setDisplayResult(mapSavedRunToBacktest(run));
+                                  setResultsTab("overview");
+                                }}
+                              >
+                                Load Run
+                              </Button>
+                            </Stack>
+                          ))}
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  )}
+                </Stack>
               )}
               {displayResult && (
                 <Stack gap={2.5} sx={{ mt: 3 }}>
+                  <Stack direction={{ xs: "column", md: "row" }} gap={1.25} alignItems={{ xs: "stretch", md: "center" }}>
+                    <TextField
+                      label="Save Run Name"
+                      value={saveName}
+                      onChange={(event) => setSaveName(event.target.value)}
+                      placeholder={strategyLabel}
+                      fullWidth
+                    />
+                    <Button variant="contained" onClick={() => saveRunMutation.mutate()} disabled={saveRunMutation.isPending}>
+                      Save Run
+                    </Button>
+                  </Stack>
+                  {saveRunMutation.error && <Alert severity="error">{String((saveRunMutation.error as Error).message)}</Alert>}
+                  {saveRunMutation.data && <Alert severity="success">Backtest run saved to your history.</Alert>}
+
                   <Tabs
                     value={resultsTab}
                     onChange={(_, value) => setResultsTab(value)}
@@ -1164,6 +1276,58 @@ export function BacktestPage() {
                                       >
                                         Apply This Setup
                                       </Button>
+                                    </Stack>
+                                  </CardContent>
+                                </Card>
+                              ))}
+                            </Stack>
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {(savedRunsQuery.data?.length ?? 0) > 0 && (
+                        <Card>
+                          <CardContent>
+                            <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", sm: "center" }} gap={1}>
+                              <Box>
+                                <Typography variant="subtitle1">Saved Backtest Runs</Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                  Reload historical simulations and compare them with your latest run.
+                                </Typography>
+                              </Box>
+                              <Chip label={`${savedRunsQuery.data!.length} saved`} variant="outlined" />
+                            </Stack>
+                            <Divider sx={{ my: 2 }} />
+                            <Stack gap={1.25}>
+                              {savedRunsQuery.data!.map((run) => (
+                                <Card key={run.id} variant="outlined" sx={{ background: "rgba(255,255,255,0.02)" }}>
+                                  <CardContent sx={{ "&:last-child": { pb: 2 } }}>
+                                    <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" gap={1.5}>
+                                      <Box>
+                                        <Typography variant="subtitle2">{run.name}</Typography>
+                                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                                          Return {(run.metrics.total_return * 100).toFixed(2)}% | Drawdown {(run.metrics.max_drawdown * 100).toFixed(2)}% | Saved {new Date(run.created_at).toLocaleString()}
+                                        </Typography>
+                                      </Box>
+                                      <Stack direction="row" gap={1}>
+                                        <Button
+                                          variant="outlined"
+                                          onClick={() => {
+                                            setDisplayResult(mapSavedRunToBacktest(run));
+                                            setResultsTab("overview");
+                                          }}
+                                        >
+                                          Load
+                                        </Button>
+                                        <Button
+                                          color="error"
+                                          variant="outlined"
+                                          onClick={() => deleteRunMutation.mutate(run.id)}
+                                          disabled={deleteRunMutation.isPending}
+                                        >
+                                          Delete
+                                        </Button>
+                                      </Stack>
                                     </Stack>
                                   </CardContent>
                                 </Card>

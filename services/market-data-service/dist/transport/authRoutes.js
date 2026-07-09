@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as bcrypt from "bcryptjs";
 import { getAuthUserFromRequest, signAccessToken } from "../auth.js";
 import { env } from "../serverEnv.js";
+import { writeAuditLog } from "../services/auditService.js";
 const registerBodySchema = z.object({
     email: z.string().trim().email(),
     password: z.string().min(8).max(200),
@@ -23,11 +24,14 @@ export function createAuthRouter({ pool }) {
         try {
             const body = registerBodySchema.parse(req.body);
             const passwordHash = await bcrypt.hash(body.password, 12);
+            const count = await pool.query("SELECT COUNT(*)::text as total FROM users WHERE password_hash IS NOT NULL");
+            const isFirstUser = Number(count.rows[0]?.total ?? "0") === 0;
+            const role = isFirstUser ? "ADMIN" : "TRADER";
             const inserted = await pool.query(`
-        INSERT INTO users(email, display_name, password_hash, preferred_language)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO users(email, display_name, password_hash, preferred_language, role)
+        VALUES ($1, $2, $3, $4, $5::user_role)
         RETURNING id, email, display_name, role::text as role, preferred_language
-        `, [body.email.toLowerCase(), body.displayName ?? null, passwordHash, body.preferredLanguage ?? "en"]);
+        `, [body.email.toLowerCase(), body.displayName ?? null, passwordHash, body.preferredLanguage ?? "en", role]);
             const user = inserted.rows[0];
             const token = signAccessToken({ id: user.id, email: user.email, role: user.role }, { secret: env.JWT_SECRET, expiresIn: env.JWT_EXPIRES_IN });
             res.status(201).json({
@@ -36,8 +40,17 @@ export function createAuthRouter({ pool }) {
                     id: user.id,
                     email: user.email,
                     displayName: user.display_name,
+                    role: user.role,
                     preferredLanguage: user.preferred_language ?? "en"
                 }
+            });
+            await writeAuditLog({
+                pool,
+                userId: user.id,
+                action: "USER_REGISTERED",
+                entityType: "user",
+                entityId: user.id,
+                metadata: { email: user.email }
             });
         }
         catch (error) {
@@ -75,8 +88,17 @@ export function createAuthRouter({ pool }) {
                     id: user.id,
                     email: user.email,
                     displayName: user.display_name,
+                    role: user.role,
                     preferredLanguage: user.preferred_language ?? "en"
                 }
+            });
+            await writeAuditLog({
+                pool,
+                userId: user.id,
+                action: "USER_LOGGED_IN",
+                entityType: "user",
+                entityId: user.id,
+                metadata: {}
             });
         }
         catch (error) {
@@ -133,7 +155,16 @@ export function createAuthRouter({ pool }) {
                 id: updated.rows[0].id,
                 email: updated.rows[0].email,
                 displayName: updated.rows[0].display_name,
+                role: authUser.role,
                 preferredLanguage: updated.rows[0].preferred_language ?? "en"
+            });
+            await writeAuditLog({
+                pool,
+                userId: authUser.id,
+                action: "PROFILE_UPDATED",
+                entityType: "user",
+                entityId: authUser.id,
+                metadata: { displayName: body.displayName ?? null, preferredLanguage: body.preferredLanguage ?? null }
             });
         }
         catch (error) {

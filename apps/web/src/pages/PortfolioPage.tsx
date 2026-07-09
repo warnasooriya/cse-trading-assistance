@@ -20,7 +20,7 @@ import {
   Typography
 } from "@mui/material";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { deletePortfolioHolding, fetchMarketWatch, fetchPortfolio, upsertPortfolioHolding } from "../api/marketDataApi";
+import { deletePortfolioHolding, fetchMarketWatch, fetchPortfolio, fetchPortfolioCopilot, upsertPortfolioHolding } from "../api/marketDataApi";
 import type { MarketWatchItem } from "../api/marketDataApi";
 
 function formatMoney(value: number): string {
@@ -53,6 +53,12 @@ export function PortfolioPage() {
     queryKey: ["portfolio"],
     queryFn: fetchPortfolio,
     staleTime: 5_000
+  });
+
+  const portfolioCopilotQuery = useQuery({
+    queryKey: ["portfolio", "copilot"],
+    queryFn: fetchPortfolioCopilot,
+    staleTime: 15_000
   });
 
   const companyLookupQuery = useQuery({
@@ -262,6 +268,50 @@ export function PortfolioPage() {
           </Grid>
         ))}
       </Grid>
+
+      {portfolioCopilotQuery.data && (
+        <Card>
+          <CardContent>
+            <Typography variant="h6">Portfolio AI Copilot</Typography>
+            <Typography color="text.secondary" sx={{ mt: 0.5 }}>
+              Portfolio-aware multi-stock orchestration using holdings, concentration, profitability, and recent market news.
+            </Typography>
+            <Divider sx={{ my: 2 }} />
+            <Alert severity={portfolioCopilotQuery.data.portfolioHealth === "Strong" ? "success" : portfolioCopilotQuery.data.portfolioHealth === "Balanced" ? "info" : "warning"}>
+              {portfolioCopilotQuery.data.summary}
+            </Alert>
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              {[
+                { label: "Add Ideas", items: portfolioCopilotQuery.data.addIdeas },
+                { label: "Reduce Ideas", items: portfolioCopilotQuery.data.reduceIdeas },
+                { label: "Rebalance Actions", items: portfolioCopilotQuery.data.rebalanceActions },
+                { label: "Risk Alerts", items: portfolioCopilotQuery.data.riskAlerts }
+              ].map((section) => (
+                <Grid item xs={12} md={6} key={section.label}>
+                  <Card variant="outlined" sx={{ height: "100%", bgcolor: "rgba(255,255,255,0.02)" }}>
+                    <CardContent>
+                      <Typography variant="subtitle1">{section.label}</Typography>
+                      <Stack gap={1} sx={{ mt: 1.25 }}>
+                        {section.items.length > 0 ? (
+                          section.items.map((item) => (
+                            <Typography key={item} variant="body2" color="text.secondary">
+                              - {item}
+                            </Typography>
+                          ))
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            No immediate action flagged.
+                          </Typography>
+                        )}
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </CardContent>
+        </Card>
+      )}
 
       <Grid container spacing={2}>
         <Grid item xs={12} xl={8}>
