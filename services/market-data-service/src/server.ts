@@ -12,6 +12,10 @@ import { createAuthRouter } from "./transport/authRoutes.js";
 import { createWatchlistsRouter } from "./transport/watchlistsRoutes.js";
 import { createAppCache } from "./cache/redisCache.js";
 import { createOfflineMarketService } from "./services/offlineMarketService.js";
+import { createBacktestRunsRouter } from "./transport/backtestRunsRoutes.js";
+import { createBrokerRouter } from "./transport/brokerRoutes.js";
+import { createAdminRouter } from "./transport/adminRoutes.js";
+import { createRiskRouter } from "./transport/riskRoutes.js";
 
 export async function createApp(): Promise<express.Express> {
   const app = express();
@@ -46,15 +50,19 @@ export async function createApp(): Promise<express.Express> {
     }
   });
 
-  app.use("/api/market", createMarketRouter({ cseClient, eventBus, offlineMarketService }));
-  app.use("/api/stocks", createStockRouter({ cseClient, offlineMarketService }));
+  app.use("/api/market", createMarketRouter({ pool, cseClient, eventBus, offlineMarketService }));
+  app.use("/api/stocks", createStockRouter({ pool, offlineMarketService }));
   app.use("/api/auth", createAuthRouter({ pool }));
-  app.use("/api/alerts", createAlertsRouter({ pool, fallbackUserId }));
+  app.use("/api/alerts", createAlertsRouter({ pool, fallbackUserId, offlineMarketService }));
   app.use(
     "/api/portfolio",
     createPortfolioRouter({ pool, fallbackUserId, portfolioName: env.DEFAULT_PORTFOLIO_NAME, cseClient })
   );
   app.use("/api/watchlists", createWatchlistsRouter({ pool, fallbackUserId }));
+  app.use("/api/backtests", createBacktestRunsRouter({ pool }));
+  app.use("/api/broker", createBrokerRouter({ pool, offlineMarketService, portfolioName: env.DEFAULT_PORTFOLIO_NAME }));
+  app.use("/api/admin", createAdminRouter({ pool }));
+  app.use("/api/risk", createRiskRouter({ pool, offlineMarketService, portfolioName: env.DEFAULT_PORTFOLIO_NAME }));
 
   void offlineMarketService.refreshAndPersistMarketWatch().catch(() => {});
   setInterval(() => {

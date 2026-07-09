@@ -242,8 +242,85 @@ CREATE TABLE IF NOT EXISTS backtest_results (
   ended_at timestamptz NOT NULL,
   metrics jsonb NOT NULL DEFAULT '{}'::jsonb,
   equity_curve jsonb NOT NULL DEFAULT '[]'::jsonb,
+  trades jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE backtest_results ADD COLUMN IF NOT EXISTS trades jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS broker_accounts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider text NOT NULL DEFAULT 'PAPER',
+  account_name text NOT NULL DEFAULT 'Paper Trading Account',
+  account_number text NOT NULL DEFAULT 'PAPER-001',
+  currency text NOT NULL DEFAULT 'LKR',
+  cash_balance numeric(20,6) NOT NULL DEFAULT 1000000,
+  is_default boolean NOT NULL DEFAULT true,
+  settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS broker_accounts_user_provider_idx ON broker_accounts (user_id, provider);
+
+CREATE TABLE IF NOT EXISTS broker_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  broker_account_id uuid NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
+  portfolio_id uuid REFERENCES portfolios(id) ON DELETE SET NULL,
+  stock_id uuid REFERENCES stocks(id) ON DELETE SET NULL,
+  symbol text NOT NULL,
+  side recommendation_action NOT NULL,
+  order_type text NOT NULL,
+  quantity numeric(20,6) NOT NULL,
+  requested_price numeric(20,6),
+  executed_price numeric(20,6),
+  fees numeric(20,6) NOT NULL DEFAULT 0,
+  gross_amount numeric(20,6) NOT NULL DEFAULT 0,
+  net_amount numeric(20,6) NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'PENDING',
+  broker_order_id text NOT NULL,
+  raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+  placed_at timestamptz NOT NULL DEFAULT now(),
+  executed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS broker_orders_user_placed_idx ON broker_orders (user_id, placed_at DESC);
+
+CREATE TABLE IF NOT EXISTS alert_deliveries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  alert_id uuid NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  channel alert_channel NOT NULL,
+  destination text,
+  status text NOT NULL DEFAULT 'DELIVERED',
+  message text NOT NULL,
+  provider text NOT NULL DEFAULT 'SIMULATED',
+  triggered_at timestamptz NOT NULL DEFAULT now(),
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS alert_deliveries_alert_time_idx ON alert_deliveries (alert_id, triggered_at DESC);
+
+CREATE TABLE IF NOT EXISTS news_articles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope text NOT NULL DEFAULT 'local',
+  symbol text,
+  title text NOT NULL,
+  summary text,
+  source text,
+  source_url text NOT NULL,
+  sentiment text NOT NULL DEFAULT 'Neutral',
+  sentiment_score numeric(10,6) NOT NULL DEFAULT 0,
+  keywords jsonb NOT NULL DEFAULT '[]'::jsonb,
+  published_at timestamptz,
+  raw jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS news_articles_scope_time_idx ON news_articles (scope, published_at DESC);
 
 CREATE TABLE IF NOT EXISTS company_financials (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -279,5 +356,38 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS stop_loss_price numeric(20,6);
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS take_profit_price numeric(20,6);
+
+CREATE TABLE IF NOT EXISTS risk_limits (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  max_position_pct_of_portfolio numeric(5,2) NOT NULL DEFAULT 15.00,
+  max_portfolio_exposure_pct numeric(5,2) NOT NULL DEFAULT 90.00,
+  max_daily_loss_pct numeric(5,2) NOT NULL DEFAULT 3.00,
+  max_open_positions integer NOT NULL DEFAULT 15,
+  default_stop_loss_pct numeric(5,2) NOT NULL DEFAULT 5.00,
+  default_take_profit_pct numeric(5,2) NOT NULL DEFAULT 10.00,
+  trading_halted boolean NOT NULL DEFAULT false,
+  trading_halted_reason text,
+  trading_halted_at timestamptz,
+  daily_loss_baseline_value numeric(20,6),
+  daily_loss_baseline_date date,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS risk_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_type text NOT NULL,
+  symbol text,
+  details jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS risk_events_user_time_idx ON risk_events (user_id, created_at DESC);
 
 COMMIT;
