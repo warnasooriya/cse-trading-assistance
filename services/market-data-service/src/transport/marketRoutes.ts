@@ -1,10 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import type { Pool } from "pg";
 import type { CseClient } from "../upstream/cseClient.js";
 import type { EventBus } from "./eventBus.js";
 import type { createOfflineMarketService } from "../services/offlineMarketService.js";
 
 type Deps = {
+  pool: Pool;
   cseClient: CseClient;
   eventBus: EventBus;
   offlineMarketService: ReturnType<typeof createOfflineMarketService>;
@@ -268,6 +270,36 @@ function extractTagValue(block: string, tag: string): string | null {
   return decodeHtml((cdata ? cdata[1] : value).trim());
 }
 
+function summarizeText(input: string): string {
+  const normalized = decodeHtml(input.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+  if (!normalized) return "";
+  return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
+}
+
+function extractSymbols(text: string): string[] {
+  const matches = text.toUpperCase().match(/\b[A-Z]{2,6}\.N0000\b/g) ?? [];
+  return Array.from(new Set(matches)).slice(0, 5);
+}
+
+function keywordList(text: string): string[] {
+  const source = text.toLowerCase();
+  const keywords = ["earnings", "dividend", "rate cut", "inflation", "tourism", "banking", "energy", "export", "profit", "loss"];
+  return keywords.filter((item) => source.includes(item)).slice(0, 6);
+}
+
+function scoreSentiment(text: string): { sentiment: "Positive" | "Neutral" | "Negative"; sentimentScore: number } {
+  const source = text.toLowerCase();
+  const positiveTerms = ["gain", "growth", "profit", "surge", "strong", "upgrade", "beat", "record", "bullish", "recover"];
+  const negativeTerms = ["fall", "loss", "drop", "weak", "downgrade", "risk", "bearish", "selloff", "slump", "decline"];
+  const positive = positiveTerms.reduce((sum, term) => sum + (source.includes(term) ? 1 : 0), 0);
+  const negative = negativeTerms.reduce((sum, term) => sum + (source.includes(term) ? 1 : 0), 0);
+  const score = Math.max(-1, Math.min(1, (positive - negative) / 4));
+  return {
+    sentiment: score > 0.2 ? "Positive" : score < -0.2 ? "Negative" : "Neutral",
+    sentimentScore: Number(score.toFixed(4))
+  };
+}
+
 async function fetchGoogleNewsRss(scope: "local" | "world", q: string | undefined, limit: number) {
   const defaultQuery =
     scope === "local"
@@ -303,16 +335,17 @@ async function fetchGoogleNewsRss(scope: "local" | "world", q: string | undefine
       const link = extractTagValue(item, "link");
       const pubDate = extractTagValue(item, "pubDate");
       const source = extractTagValue(item, "source");
+      const description = extractTagValue(item, "description");
       if (!title || !link) return null;
-      return { title, link, pubDate, source };
+      return { title, link, pubDate, source, description };
     })
-    .filter((x): x is { title: string; link: string; pubDate: string | null; source: string | null } => x !== null)
+    .filter((x): x is { title: string; link: string; pubDate: string | null; source: string | null; description: string | null } => x !== null)
     .slice(0, limit);
 
   return parsed;
 }
 
-export function createMarketRouter({ cseClient, eventBus, offlineMarketService }: Deps): Router {
+export function createMarketRouter({ pool, cseClient, eventBus, offlineMarketService }: Deps): Router {
   const router = Router();
 
   router.get("/dashboard", async (req: Request, res: Response) => {
@@ -511,7 +544,45 @@ export function createMarketRouter({ cseClient, eventBus, offlineMarketService }
     try {
       const query = newsQuerySchema.parse(req.query);
       const items = await fetchGoogleNewsRss(query.scope, query.q, query.limit);
-      res.json({ scope: query.scope, q: query.q ?? null, items });
+      const enriched = [];
+      for (const item of items) {
+        const combined = `${item.title} ${item.description ?? ""}`;
+        const { sentiment, sentimentScore } = scoreSentiment(combined);
+        const symbols = extractSymbols(combined);
+        const summary = summarizeText(item.description ?? item.title);
+        const keywords = keywordList(combined);
+        await pool.query(
+          `
+          INSERT INTO news_articles(scope, symbol, title, summary, source, source_url, sentiment, sentiment_score, keywords, published_at, raw)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb)
+          `,
+          [
+            query.scope,
+            symbols[0] ?? null,
+            item.title,
+            summary,
+            item.source,
+            item.link,
+            sentiment,
+            sentimentScore,
+            JSON.stringify(keywords),
+            item.pubDate ? new Date(item.pubDate).toISOString() : null,
+            JSON.stringify(item)
+          ]
+        );
+        enriched.push({
+          title: item.title,
+          link: item.link,
+          pubDate: item.pubDate,
+          source: item.source,
+          summary,
+          sentiment,
+          sentimentScore,
+          symbols,
+          keywords
+        });
+      }
+      res.json({ scope: query.scope, q: query.q ?? null, items: enriched });
     } catch (error) {
       res.status(502).json({ error: (error as Error).message });
     }

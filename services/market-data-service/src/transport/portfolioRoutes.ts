@@ -4,6 +4,8 @@ import type { Pool } from "pg";
 import type { CseClient } from "../upstream/cseClient.js";
 import { getAuthUserFromRequest } from "../auth.js";
 import { env } from "../serverEnv.js";
+import { generatePortfolioCopilot } from "../services/portfolioCopilotService.js";
+import { writeAuditLog } from "../services/auditService.js";
 
 type Deps = {
   pool: Pool;
@@ -220,142 +222,186 @@ async function hydrateMissingSectorData(pool: Pool, cseClient: CseClient, rows: 
   return sectorBySymbol;
 }
 
+async function buildPortfolioResponse(params: {
+  pool: Pool;
+  userId: string;
+  portfolioName: string;
+  cseClient: CseClient;
+}) {
+  const portfolioId = await ensureUserPortfolio(params.pool, params.userId, params.portfolioName);
+  const holdingsResult = await params.pool.query<HoldingRow>(
+    `
+    SELECT
+      s.symbol,
+      s.name,
+      s.sector_name,
+      s.last_price::text,
+      h.quantity::text,
+      h.average_cost::text,
+      h.buy_commission::text,
+      h.sell_commission_rate::text
+    FROM holdings h
+    JOIN stocks s ON s.id = h.stock_id
+    WHERE h.portfolio_id = $1
+    ORDER BY s.symbol ASC
+    `,
+    [portfolioId]
+  );
+
+  const hydratedSectorBySymbol = await hydrateMissingSectorData(params.pool, params.cseClient, holdingsResult.rows);
+
+  let priceMap: MarketPriceMap = {};
+  try {
+    const tradeSummary = await params.cseClient.getTradeSummary();
+    priceMap = normalizeTradeSummaryPriceMap(tradeSummary);
+  } catch {
+    priceMap = {};
+  }
+
+  if (Object.keys(priceMap).length === 0) {
+    try {
+      const today = await params.cseClient.getTodaySharePriceList();
+      priceMap = normalizeTodaySharePriceMap(today);
+    } catch {
+      priceMap = {};
+    }
+  }
+
+  const baseHoldings = holdingsResult.rows.map((row) => {
+    const quantity = Number(row.quantity);
+    const avgCost = Number(row.average_cost);
+    const buyCommission = Number(row.buy_commission ?? "0");
+    const configuredSellCommissionRate = Number(row.sell_commission_rate ?? "0");
+    const sellCommissionRate =
+      Number.isFinite(configuredSellCommissionRate) && configuredSellCommissionRate > 0
+        ? configuredSellCommissionRate
+        : DEFAULT_SALES_COMMISSION_RATE;
+    const marketPrice = priceMap[row.symbol] ?? toNumber(row.last_price);
+    const valuationPrice = marketPrice ?? avgCost;
+    const costBasis = quantity * avgCost;
+    const totalInvested = costBasis;
+    const marketValue = quantity * valuationPrice;
+    const estimatedSellCommission = marketValue * (sellCommissionRate / 100);
+    const estimatedNetProceeds = marketValue - estimatedSellCommission;
+    const grossProfit = marketValue - costBasis;
+    const netProfit = estimatedNetProceeds - costBasis;
+    const grossReturnPct = costBasis > 0 ? (grossProfit / costBasis) * 100 : 0;
+    const netReturnPct = costBasis > 0 ? (netProfit / costBasis) * 100 : 0;
+    const breakEvenPrice =
+      quantity > 0 && sellCommissionRate < 100 ? costBasis / (quantity * (1 - sellCommissionRate / 100)) : avgCost;
+
+    return {
+      symbol: row.symbol,
+      name: row.name ?? row.symbol,
+      sector: hydratedSectorBySymbol.get(row.symbol) ?? row.sector_name ?? "Unclassified",
+      quantity,
+      avgCost,
+      buyCommission,
+      sellCommissionRate,
+      marketPrice,
+      costBasis,
+      totalInvested,
+      marketValue,
+      estimatedSellCommission,
+      estimatedNetProceeds,
+      grossProfit,
+      netProfit,
+      grossReturnPct,
+      netReturnPct,
+      breakEvenPrice
+    };
+  });
+
+  const totalMarketValue = baseHoldings.reduce((sum, holding) => sum + holding.marketValue, 0);
+  const holdings = baseHoldings.map((holding) => ({
+    ...holding,
+    weightPct: totalMarketValue > 0 ? (holding.marketValue / totalMarketValue) * 100 : 0
+  }));
+
+  const summary = holdings.reduce(
+    (acc, holding) => {
+      acc.holdingsCount += 1;
+      acc.totalQuantity += holding.quantity;
+      acc.totalCostBasis += holding.costBasis;
+      acc.totalBuyCommission += holding.buyCommission;
+      acc.totalInvested += holding.totalInvested;
+      acc.totalMarketValue += holding.marketValue;
+      acc.totalEstimatedSellCommission += holding.estimatedSellCommission;
+      acc.totalEstimatedNetProceeds += holding.estimatedNetProceeds;
+      acc.totalGrossProfit += holding.grossProfit;
+      acc.totalNetProfit += holding.netProfit;
+      return acc;
+    },
+    {
+      holdingsCount: 0,
+      totalQuantity: 0,
+      totalCostBasis: 0,
+      totalBuyCommission: 0,
+      totalInvested: 0,
+      totalMarketValue: 0,
+      totalEstimatedSellCommission: 0,
+      totalEstimatedNetProceeds: 0,
+      totalGrossProfit: 0,
+      totalNetProfit: 0
+    }
+  );
+
+  return {
+    id: portfolioId,
+    name: params.portfolioName,
+    summary: {
+      ...summary,
+      grossReturnPct: summary.totalCostBasis > 0 ? (summary.totalGrossProfit / summary.totalCostBasis) * 100 : 0,
+      netReturnPct: summary.totalInvested > 0 ? (summary.totalNetProfit / summary.totalInvested) * 100 : 0
+    },
+    holdings
+  };
+}
+
 export function createPortfolioRouter({ pool, fallbackUserId, portfolioName, cseClient }: Deps): Router {
   const router = Router();
 
   router.get("/", async (req: Request, res: Response) => {
     try {
       const userId = resolveUserId(req, fallbackUserId);
-      const portfolioId = await ensureUserPortfolio(pool, userId, portfolioName);
-      const holdingsResult = await pool.query<HoldingRow>(
+      res.json(await buildPortfolioResponse({ pool, userId, portfolioName, cseClient }));
+    } catch (error) {
+      res.status(502).json({ error: (error as Error).message });
+    }
+  });
+
+  router.get("/copilot", async (req: Request, res: Response) => {
+    try {
+      const userId = resolveUserId(req, fallbackUserId);
+      const portfolio = await buildPortfolioResponse({ pool, userId, portfolioName, cseClient });
+      const news = await pool.query(
         `
-        SELECT
-          s.symbol,
-          s.name,
-          s.sector_name,
-          s.last_price::text,
-          h.quantity::text,
-          h.average_cost::text,
-          h.buy_commission::text,
-          h.sell_commission_rate::text
-        FROM holdings h
-        JOIN stocks s ON s.id = h.stock_id
-        WHERE h.portfolio_id = $1
-        ORDER BY s.symbol ASC
-        `,
-        [portfolioId]
+        SELECT title, sentiment, sentiment_score, symbol, raw
+        FROM news_articles
+        ORDER BY COALESCE(published_at, created_at) DESC
+        LIMIT 12
+        `
       );
-
-      const hydratedSectorBySymbol = await hydrateMissingSectorData(pool, cseClient, holdingsResult.rows);
-
-      let priceMap: MarketPriceMap = {};
-      try {
-        const tradeSummary = await cseClient.getTradeSummary();
-        priceMap = normalizeTradeSummaryPriceMap(tradeSummary);
-      } catch {
-        priceMap = {};
-      }
-
-      if (Object.keys(priceMap).length === 0) {
-        try {
-          const today = await cseClient.getTodaySharePriceList();
-          priceMap = normalizeTodaySharePriceMap(today);
-        } catch {
-          priceMap = {};
-        }
-      }
-
-      const baseHoldings = holdingsResult.rows.map((row) => {
-        const quantity = Number(row.quantity);
-        const avgCost = Number(row.average_cost);
-        const buyCommission = Number(row.buy_commission ?? "0");
-        const configuredSellCommissionRate = Number(row.sell_commission_rate ?? "0");
-        const sellCommissionRate =
-          Number.isFinite(configuredSellCommissionRate) && configuredSellCommissionRate > 0
-            ? configuredSellCommissionRate
-            : DEFAULT_SALES_COMMISSION_RATE;
-        const marketPrice = priceMap[row.symbol] ?? toNumber(row.last_price);
-        const valuationPrice = marketPrice ?? avgCost;
-        const costBasis = quantity * avgCost;
-        const totalInvested = costBasis;
-        const marketValue = quantity * valuationPrice;
-        const estimatedSellCommission = marketValue * (sellCommissionRate / 100);
-        const estimatedNetProceeds = marketValue - estimatedSellCommission;
-        const grossProfit = marketValue - costBasis;
-        const netProfit = estimatedNetProceeds - costBasis;
-        const grossReturnPct = costBasis > 0 ? (grossProfit / costBasis) * 100 : 0;
-        const netReturnPct = costBasis > 0 ? (netProfit / costBasis) * 100 : 0;
-        const breakEvenPrice =
-          quantity > 0 && sellCommissionRate < 100
-            ? costBasis / (quantity * (1 - sellCommissionRate / 100))
-            : avgCost;
-
-        return {
-          symbol: row.symbol,
-          name: row.name ?? row.symbol,
-          sector: hydratedSectorBySymbol.get(row.symbol) ?? row.sector_name ?? "Unclassified",
-          quantity,
-          avgCost,
-          buyCommission,
-          sellCommissionRate,
-          marketPrice,
-          costBasis,
-          totalInvested,
-          marketValue,
-          estimatedSellCommission,
-          estimatedNetProceeds,
-          grossProfit,
-          netProfit,
-          grossReturnPct,
-          netReturnPct,
-          breakEvenPrice
-        };
+      const copilot = await generatePortfolioCopilot({
+        holdings: portfolio.holdings.map((holding) => ({
+          symbol: holding.symbol,
+          sector: holding.sector,
+          weightPct: holding.weightPct,
+          netProfit: holding.netProfit,
+          netReturnPct: holding.netReturnPct,
+          breakEvenPrice: holding.breakEvenPrice,
+          marketPrice: holding.marketPrice
+        })),
+        totalMarketValue: portfolio.summary.totalMarketValue,
+        totalNetProfit: portfolio.summary.totalNetProfit,
+        topNews: news.rows.map((row: any) => ({
+          title: String(row.title ?? ""),
+          sentiment: String(row.sentiment ?? "Neutral"),
+          sentimentScore: Number(row.sentiment_score ?? 0),
+          symbols: typeof row.symbol === "string" && row.symbol ? [row.symbol] : Array.isArray(row.raw?.symbols) ? row.raw.symbols : []
+        }))
       });
-
-      const totalMarketValue = baseHoldings.reduce((sum, holding) => sum + holding.marketValue, 0);
-      const holdings = baseHoldings.map((holding) => ({
-        ...holding,
-        weightPct: totalMarketValue > 0 ? (holding.marketValue / totalMarketValue) * 100 : 0
-      }));
-
-      const summary = holdings.reduce(
-        (acc, holding) => {
-          acc.holdingsCount += 1;
-          acc.totalQuantity += holding.quantity;
-          acc.totalCostBasis += holding.costBasis;
-          acc.totalBuyCommission += holding.buyCommission;
-          acc.totalInvested += holding.totalInvested;
-          acc.totalMarketValue += holding.marketValue;
-          acc.totalEstimatedSellCommission += holding.estimatedSellCommission;
-          acc.totalEstimatedNetProceeds += holding.estimatedNetProceeds;
-          acc.totalGrossProfit += holding.grossProfit;
-          acc.totalNetProfit += holding.netProfit;
-          return acc;
-        },
-        {
-          holdingsCount: 0,
-          totalQuantity: 0,
-          totalCostBasis: 0,
-          totalBuyCommission: 0,
-          totalInvested: 0,
-          totalMarketValue: 0,
-          totalEstimatedSellCommission: 0,
-          totalEstimatedNetProceeds: 0,
-          totalGrossProfit: 0,
-          totalNetProfit: 0
-        }
-      );
-
-      res.json({
-        id: portfolioId,
-        name: portfolioName,
-        summary: {
-          ...summary,
-          grossReturnPct: summary.totalCostBasis > 0 ? (summary.totalGrossProfit / summary.totalCostBasis) * 100 : 0,
-          netReturnPct: summary.totalInvested > 0 ? (summary.totalNetProfit / summary.totalInvested) * 100 : 0
-        },
-        holdings
-      });
+      res.json(copilot);
     } catch (error) {
       res.status(502).json({ error: (error as Error).message });
     }
@@ -396,6 +442,14 @@ export function createPortfolioRouter({ pool, fallbackUserId, portfolioName, cse
         `,
         [portfolioId, stockId, body.quantity, body.avgCost, body.buyCommission, body.sellCommissionRate]
       );
+      await writeAuditLog({
+        pool,
+        userId,
+        action: "PORTFOLIO_HOLDING_UPSERTED",
+        entityType: "portfolio",
+        entityId: portfolioId,
+        metadata: { symbol: body.symbol, quantity: body.quantity, avgCost: body.avgCost }
+      });
 
       res.status(201).json({ ok: true });
     } catch (error) {
@@ -417,6 +471,14 @@ export function createPortfolioRouter({ pool, fallbackUserId, portfolioName, cse
       }
 
       await pool.query("DELETE FROM holdings WHERE portfolio_id = $1 AND stock_id = $2", [portfolioId, stockId]);
+      await writeAuditLog({
+        pool,
+        userId,
+        action: "PORTFOLIO_HOLDING_DELETED",
+        entityType: "portfolio",
+        entityId: portfolioId,
+        metadata: { symbol }
+      });
       res.json({ ok: true });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });

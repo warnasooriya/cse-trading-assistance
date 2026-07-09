@@ -2,318 +2,389 @@
 
 ## 1. Overview
 
-`CSE AI Trading Assistant` is a multi-service web platform for market intelligence, stock analysis, AI-assisted recommendations, backtesting, portfolio monitoring, risk visibility, alerts, and multilingual news sentiment review for the Colombo Stock Exchange.
+`CSE AI Trading Assistant` is a multi-service Colombo Stock Exchange trading intelligence platform that combines live market data, offline-capable local storage, portfolio management, alerts, watchlists, trade ideas, profit simulation, AI-assisted stock analysis, and strategy backtesting.
 
-This repository currently contains:
+This documentation is synchronized with the current application implementation in the repository.
 
-- A React + TypeScript frontend
-- A Node.js market-data service
-- A Python technical-analysis service
-- A Python AI recommendation service
-- A Python backtesting service
-- PostgreSQL + TimescaleDB schema definitions
-- Redis and RabbitMQ runtime infrastructure
-- Docker Compose and Kubernetes deployment scaffolding
-- CI workflow for build and validation
+Current repository layers:
 
-This document describes the implemented system behavior in the current codebase and highlights where scaffolding exists for future production depth.
+- React + TypeScript web application
+- Node.js + Express market-data and user-data service
+- Python FastAPI technical analysis service
+- Python FastAPI AI recommendation service
+- Python FastAPI backtesting service
+- PostgreSQL / TimescaleDB-oriented schema
+- Redis cache layer
+- RabbitMQ event bus
+- Docker Compose local runtime
+- Kubernetes deployment scaffolding
+- GitHub Actions CI pipeline
 
-## 2. Current Product Scope
+## 2. Product Scope
 
-### Implemented in the codebase
+### 2.1 Product Features
 
 - Executive dashboard
-- Full market watch backed by live CSE `tradeSummary`
-- Stock analysis page with company autocomplete
-- Live company quote lookup
-- Rule-based explainable recommendation endpoint
-- Technical indicator computation service
-- SMA crossover backtesting service
-- Portfolio monitoring UI
-- Risk monitoring UI
-- Alerts management UI
-- News and sentiment UI with multilingual content switching
-- English, Sinhala, and Tamil UI localization support
-- Docker and Kubernetes deployment assets
+- Live full market watch
+- Live quote lookup with fallback sources
+- Stock analysis with company autocomplete
+- AI recommendation and trade planning
+- Live technical indicators in Stock Analysis
+- Gemini trading copilot in Stock Analysis
+- Paper broker execution with order preview and holdings sync
+- Custom external broker account linking and provider-ready execution flow
+- Profit simulator
+- Backtesting Strategy Lab
+- Auto Simulation for backtesting parameter search
+- Saved backtest run history
+- Persistent watchlists
+- Persistent alerts
+- Live alert evaluation and delivery logs for Email / SMS / Push workflows
+- Persistent portfolio holdings and investor metrics
+- Portfolio AI copilot with multi-stock orchestration
+- Risk monitoring
+- Login, registration, and profile management
+- Role-aware authentication with admin/analyst/trader controls
+- Audit logging for critical user and trading actions
+- Protected premium routes for signed-in users
+- English, Sinhala, and Tamil localization
+- Live News & Sentiment ingestion with sentiment scoring, extracted symbols, and keywords
+- Offline-capable market watch, quote, and history fallback
 
-### Present but not yet fully production-complete
+### 2.2 Platform and Delivery
 
-- Local database persistence for the full market watch flow
-- Historical market ingestion pipeline into TimescaleDB
-- End-to-end portfolio persistence against PostgreSQL
-- Real alert delivery workflows for email, SMS, and push
-- Real news ingestion and LLM-driven sentiment pipeline
-- AWS Cognito authentication and RBAC enforcement in runtime
-- Reporting service implementation
-- Full broker integration
-- Automated model training and model registry lifecycle
+- Kubernetes manifests now include config, secrets template, probes, resources, ingress, and autoscaling definitions
+- CI validates frontend, market-data-service, Python services, and backtesting tests
+
+### 2.3 Remaining Higher-Order Enhancements
+
+- External broker reconciliation and asynchronous fill-status sync after order placement
+- Deeper transaction-level realized P/L accounting across portfolio lifecycle events
+- Stateful production manifests for PostgreSQL / Redis / RabbitMQ in Kubernetes
+- Extended portfolio journaling and AI workflow memory
 
 ## 3. High-Level Architecture
 
 ```mermaid
 flowchart LR
   UI[React Web App] --> MDS[Market Data Service]
+  UI --> BTS[Backtesting Service]
   UI --> TAS[Technical Analysis Service]
   UI --> AIS[AI Prediction Service]
-  UI --> BTS[Backtesting Service]
 
   MDS --> CSE[CSE Public API]
-  MDS --> RMQ[RabbitMQ]
+  MDS --> REDIS[(Redis Cache)]
+  MDS --> DB[(PostgreSQL / TimescaleDB)]
+  MDS --> RMQ[(RabbitMQ)]
 
-  DB[(PostgreSQL + TimescaleDB)]
-  REDIS[(Redis)]
-
-  MDS -. schema defined .-> DB
-  TAS -. future computed indicators .-> DB
-  AIS -. future predictions .-> DB
-  BTS -. future stored backtests .-> DB
+  BTS -. accepts historical candles .-> UI
+  TAS -. indicator engine .-> UI
+  AIS -. recommendation engine .-> UI
 ```
+
+Core system pattern:
+
+- Try live CSE source first
+- Fallback to Redis cache
+- Fallback to PostgreSQL stored data
+- Persist useful market snapshots and history locally for offline continuity
 
 ## 4. Repository Structure
 
-```F#
+```text
 TA/
-  apps/web/                         Frontend application
-  services/market-data-service/     Node.js CSE data proxy and market APIs
-  services/technical-analysis-service/  FastAPI technical indicators
-  services/ai-prediction-service/   FastAPI recommendation engine
-  services/backtesting-service/     FastAPI backtesting engine
-  infra/db/schema.sql               PostgreSQL + TimescaleDB schema
-  k8s/                              Kubernetes manifests
-  .github/workflows/ci.yml          CI pipeline
-  docker-compose.yml                Local multi-service runtime
-  shared/contracts/                 Shared domain contracts
-  docs/                             Project documentation
+  apps/web/                              Frontend application
+  services/market-data-service/          Node.js API and persistence layer
+  services/technical-analysis-service/   FastAPI technical indicators
+  services/ai-prediction-service/        FastAPI recommendation engine
+  services/backtesting-service/          FastAPI strategy simulation engine
+  infra/db/schema.sql                    PostgreSQL / TimescaleDB schema
+  shared/contracts/                      Shared contracts and event definitions
+  docs/                                  Project documentation
+  k8s/                                   Kubernetes manifests
+  .github/workflows/ci.yml               CI pipeline
+  docker-compose.yml                     Local runtime definition
 ```
 
-## 5. Frontend Architecture
-
-### Technology
+## 5. Frontend Technology
 
 - React 19
 - TypeScript
 - Material UI
-- Redux Toolkit
+- React Router
 - React Query
+- Redux Toolkit
 - Recharts
 
-### Frontend entry points
+Frontend entry points:
 
 - `apps/web/src/main.tsx`
 - `apps/web/src/App.tsx`
 - `apps/web/src/app/AppShell.tsx`
 
-### Routing
+## 6. Frontend Routes
 
-The frontend currently exposes these application routes:
+### Public routes
 
 - `/` -> Executive Dashboard
 - `/market-watch` -> Full Market Watch
+- `/news` -> News & Sentiment
+- `/login` -> Login
+- `/register` -> Registration
+
+### Protected routes
+
+The following pages remain visible in navigation, but require login when opened:
+
+- `/suggestions` -> Trade Ideas
+- `/watchlists` -> Watchlists
 - `/stocks` -> Stock Analysis
 - `/portfolio` -> Portfolio Command
-- `/risk` -> Risk Center
-- `/alerts` -> Alert Operations Center
-- `/news` -> News and Sentiment Intelligence
+- `/alerts` -> Alerts
 - `/backtests` -> Backtesting Strategy Lab
+- `/profit-simulator` -> Profit Simulator
+- `/profile` -> Profile
 
-### App shell behavior
+## 7. Application Shell
 
 The application shell provides:
 
-- Responsive left navigation
-- Fixed desktop sidebar
-- Mobile drawer navigation
-- Top search bar
-- Search routing shortcuts
-- Language selector for `en`, `si`, and `ta`
-- Notification shortcut to alerts
-- Settings quick-navigation menu
-- Shared premium workspace header
+- Responsive sidebar and mobile drawer navigation
+- Top search bar with shortcut routing
+- Language selector
+- Notification shortcut
+- Settings / profile area
+- Auth-aware user actions
+- Premium dark enterprise layout
 
-### Localization behavior
+Localization behavior:
 
-Localization is handled by `apps/web/src/i18n/I18nProvider.tsx`.
+- Supports English (`en`), Sinhala (`si`), Tamil (`ta`)
+- Stores selected language locally
+- Updates document language
+- Formats numbers by locale
 
-Current behavior:
+## 8. Frontend Features
 
-- Stores the selected language in local storage
-- Sets the HTML document language
-- Provides translation lookup for shared labels and page copy
-- Supports English, Sinhala, and Tamil
-- Formats numbers according to the selected locale
-
-## 6. Frontend Feature and Component Behavior
-
-### 6.1 Executive Dashboard
-
-File:
-
-- `apps/web/src/pages/DashboardPage.tsx`
+### 8.1 Executive Dashboard
 
 Behavior:
 
-- Loads market snapshot from `GET /api/market/dashboard`
-- Displays:
+- Loads aggregated dashboard data from `GET /api/market/dashboard`
+- Shows:
   - ASPI
-  - S\&P SL20
-  - portfolio value
+  - S&P SL20
+  - managed portfolio value
   - risk posture
   - sector leadership
-  - execution and exposure timeline
-  - priority trading signals
-  - sector allocation
-  - liquidity view
+  - liquidity / market action widgets
   - portfolio monitor
-  - news and sentiment radar
-- `Create Trading Alert` routes to alert creation flow
-- Review actions route to symbol-specific stock analysis
+  - alert and stock drill-down shortcuts
 
-### 6.2 Full Market Watch
-
-File:
-
-- `apps/web/src/pages/MarketWatchPage.tsx`
+### 8.2 Full Market Watch
 
 Behavior:
 
-- Uses live CSE `tradeSummary` data through the market-data service
-- Shows a searchable market-wide table
-- Supports:
-  - symbol/company search
-  - sorting
-  - direction selection
-  - drill-down to stock analysis
-- Displays advancers and decliners summary chips
-
-### 6.3 Stock Analysis
-
-File:
-
-- `apps/web/src/pages/StockAnalysisPage.tsx`
-
-Behavior:
-
-- Accepts route query parameter `symbol`
-- Provides company autocomplete using the full market-watch feed
-- Supports company name and symbol lookup
-- Loads:
-  - stock quote from market-data service
-  - recommendation from stock API
-- Displays:
-  - company header
-  - last traded price
-  - price change
-  - synthetic price visualization based on current quote
-  - AI recommendation and confidence
-  - market snapshot metrics
-  - signal matrix
-  - indicator explanations
-
-Note:
-
-- The chart is currently a visualization based on current quote context, not a fully persisted historical OHLC series from TimescaleDB.
-
-### 6.4 Portfolio Command
-
-File:
-
-- `apps/web/src/pages/PortfolioPage.tsx`
-
-Behavior:
-
-- Uses current mock portfolio data from `enterpriseMock.ts`
-- Displays:
-  - holdings table
-  - sector allocation pie chart
-  - total managed value
-
-Note:
-
-- This is currently a UI-level operational surface and is not yet backed by persisted user portfolios from PostgreSQL.
-
-### 6.5 Risk Center
-
-File:
-
-- `apps/web/src/pages/RiskPage.tsx`
-
-Behavior:
-
-- Calculates display metrics from portfolio mock data
-- Shows:
-  - portfolio risk score
-  - largest position exposure
-  - max sector exposure
-  - policy progress bars
-  - advisory alerts
-
-### 6.6 Alerts
-
-File:
-
-- `apps/web/src/pages/AlertsPage.tsx`
-
-Behavior:
-
-- Displays existing alert rules
-- Supports local UI creation of a new alert rule
-- Supports toggling alert status between active and paused
-- Supports channel selection:
-  - email
-  - SMS
-  - push notification
-
-Note:
-
-- Current implementation is UI-local state and not yet connected to persistent backend alert storage or message delivery.
-
-### 6.7 News and Sentiment
-
-File:
-
-- `apps/web/src/pages/NewsSentimentPage.tsx`
-
-Behavior:
-
-- Displays multilingual news/sentiment items
+- Loads full market watch from `GET /api/market/watch`
 - Supports:
   - search
-  - source filter
-  - sentiment filter
-  - reset
-  - open-source external links
-- News headline and summary change with the selected UI language
+  - sort
+  - price and turnover browsing
+  - drill-down into stock analysis
+- Uses live CSE data with cache/database fallback
 
-Note:
-
-- Current content comes from local mock data with localized fields.
-- Real-time ingestion from CSE news, announcements, or LLM sentiment processing is not yet connected.
-
-### 6.8 Backtesting Strategy Lab
-
-File:
-
-- `apps/web/src/pages/BacktestPage.tsx`
+### 8.3 Stock Analysis
 
 Behavior:
 
-- Accepts:
-  - stock symbol
-  - initial capital
-  - fast SMA period
-  - slow SMA period
-- Calls the backtesting service
+- Supports company autocomplete using market watch
+- Supports query-param driven symbol analysis
+- Loads:
+  - quote
+  - recommendation
+  - stored historical series
 - Displays:
-  - total return
-  - win rate
-  - profit factor
-  - max drawdown
+  - current price and price change
+  - history chart
+  - AI recommendation card
+  - live technical indicator values from technical-analysis service
+  - market snapshot metrics
+  - signal matrix
+  - indicator reference
+  - AI Trade Plan
+  - AI Position Planner
+  - AI Profit Projection
+  - AI Scenario Forecast
+  - Gemini Trading Copilot guidance
+  - paper broker order execution and preview
+
+### 8.4 Trade Ideas
+
+Behavior:
+
+- Uses `GET /api/market/suggestions`
+- Displays ranked buy/sell/hold ideas
+- Shows:
+  - confidence
+  - reasoning
+  - supporting facts
+  - related news context
+
+### 8.5 Watchlists
+
+Behavior:
+
+- Persistent backend-backed watchlists
+- Multiple watchlist support
+- Add/remove symbols
+- Delete watchlists
+- Analyze selected symbols
+
+### 8.6 Portfolio Command
+
+Behavior:
+
+- Persistent user portfolio backed by PostgreSQL
+- Add/update/delete holdings
+- Tracks:
+  - symbol
+  - name
+  - sector
+  - quantity
+  - average cost
+  - buy commission
+  - sell commission rate
+- Computes investor metrics:
+  - cost basis
+  - total invested
+  - market value
+  - estimated sell commission
+  - estimated net proceeds
+  - gross profit
+  - net profit
+  - gross return %
+  - net return %
+  - break-even price
+  - weight %
+- Shows sector allocation and portfolio insights
+- Includes Portfolio AI Copilot:
+  - add ideas
+  - reduce ideas
+  - rebalance actions
+  - risk alerts
+  - portfolio-level summary from holdings plus live news context
+
+### 8.7 Risk Center
+
+Behavior:
+
+- Uses portfolio context to show risk posture
+- Displays:
+  - portfolio risk score
+  - concentration insights
+  - policy bars
+  - risk warnings
+
+### 8.8 Alerts
+
+Behavior:
+
+- Persistent alert CRUD
+- Create, pause, resume, and delete alert rules
+- Supports destination-aware Email / SMS / Push delivery configuration
+- Can evaluate live alert rules on demand
+- Stores recent alert delivery history with provider, destination, status, and message
+- Supports alert types such as:
+  - price breakout
+  - RSI oversold / overbought
+  - volume spike
+  - AI buy / sell signal
+
+### 8.9 News & Sentiment
+
+Behavior:
+
+- Live market news ingestion through RSS-backed feeds
+- Search and filtering by source / sentiment
+- Sentiment scoring for each article
+- Extracted symbols and keyword tags
+- Persisted news article records in PostgreSQL
+- Shared live market news usage across News & Sentiment and Trade Ideas
+
+### 8.10 Backtesting Strategy Lab
+
+Behavior:
+
+- Guided 4-step simulation builder
+- Strategy presets:
+  - Conservative
+  - Balanced
+  - Aggressive
+- Supports:
+  - company selection
+  - history range
+  - initial capital
+  - position size
+  - slippage
+  - fee modes
+  - SMA Crossover strategy
+  - RSI Reversion strategy
+- Displays:
+  - profitability score
+  - smart recommendations
+  - best next actions
+  - overview metrics
   - equity curve
-  - strategy summary
+  - trade table
+  - CSV exports
+- Includes `Auto Simulation`:
+  - automatically tests multiple SMA/RSI parameter combinations
+  - ranks results
+  - applies best setup back into the lab
+- Includes backtest history management:
+  - save run
+  - list saved runs
+  - load saved runs
+  - delete saved runs
 
-## 7. Backend Services
+### 8.11 Profit Simulator
 
-## 7.1 Market Data Service
+Behavior:
+
+- Fee-aware manual profit simulation tool
+- Supports:
+  - total capital
+  - buy price
+  - sell price
+  - target profit
+  - target return
+  - fee mode
+  - buy/sell fee %
+  - lot size
+- Computes:
+  - shares
+  - total buy cost
+  - sell proceeds
+  - net profit
+  - break-even price
+  - target sell price
+
+### 8.12 Authentication and Profile
+
+Behavior:
+
+- Register with email/password
+- Login with email/password
+- First registered user becomes `ADMIN`
+- JWT-based session restore
+- Protected route handling with return-to-page flow
+- Profile update for display name and preferred language
+- Role-aware backend controls for admin and analyst-only endpoints
+- Audit logging for registration, login, profile updates, portfolio updates, alerts, backtests, and broker actions
+
+## 9. Backend Services
+
+### 9.1 Market Data Service
 
 Location:
 
@@ -324,44 +395,90 @@ Technology:
 - Node.js
 - Express
 - TypeScript
+- PostgreSQL client
+- Redis client
+- RabbitMQ client
+- Zod validation
 
-Current responsibilities:
+Responsibilities:
 
-- Acts as the live CSE data proxy
-- Provides dashboard APIs
-- Provides quote and recommendation APIs
-- Provides full market watch API
-- Publishes market snapshot events to RabbitMQ
+- Live CSE data proxy
+- Dashboard aggregation
+- Market watch API
+- Quote API
+- Recommendation API
+- Historical price API
+- Technical indicator API
+- Stock copilot API
+- Suggestions API
+- RSS news aggregation for trade ideas
+- Live news sentiment ingestion and persistence
+- Auth API
+- Watchlists API
+- Alerts API
+- Portfolio API
+- Portfolio copilot API
+- Broker account and execution API
+- Admin RBAC and audit API
+- Market persistence and cache fallback
 
-### Implemented endpoints
+Main implemented endpoint groups:
 
 - `GET /health`
 - `GET /api/market/dashboard`
 - `GET /api/market/watch`
+- `GET /api/market/suggestions`
+- `GET /api/market/news`
 - `GET /api/stocks/:symbol/quote`
 - `GET /api/stocks/:symbol/recommendation`
+- `GET /api/stocks/:symbol/history`
+- `GET /api/stocks/:symbol/indicators`
+- `POST /api/stocks/:symbol/copilot`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `PATCH /api/auth/me`
+- `GET /api/watchlists`
+- `POST /api/watchlists`
+- `DELETE /api/watchlists/:id`
+- `POST /api/watchlists/:id/items`
+- `DELETE /api/watchlists/:id/items/:symbol`
+- `GET /api/alerts`
+- `POST /api/alerts`
+- `PATCH /api/alerts/:id`
+- `DELETE /api/alerts/:id`
+- `GET /api/alerts/deliveries`
+- `POST /api/alerts/evaluate`
+- `GET /api/portfolio`
+- `GET /api/portfolio/copilot`
+- `PUT /api/portfolio/holdings`
+- `DELETE /api/portfolio/holdings/:symbol`
+- `GET /api/backtests`
+- `POST /api/backtests`
+- `DELETE /api/backtests/:id`
+- `GET /api/broker/account`
+- `POST /api/broker/account/link`
+- `POST /api/broker/preview`
+- `GET /api/broker/orders`
+- `POST /api/broker/orders`
+- `GET /api/admin/users`
+- `PATCH /api/admin/users/:id/role`
+- `GET /api/admin/audit-logs`
 
-### Current data behavior
+### 9.2 Offline Market Service Pattern
 
-- Pulls live market data directly from `https://www.cse.lk/api/`
-- Does not yet persist the market watch flow to PostgreSQL
-- Publishes `market.snapshot.updated` events to RabbitMQ
+Implemented behavior:
 
-### Upstream CSE endpoints currently used
+- Live-first fetch from CSE
+- Redis cache fallback
+- PostgreSQL fallback
+- Background market sync and persistence
+- Stored quote reconstruction from database
+- Stored historical series API
 
-- `marketStatus`
-- `marketSummery`
-- `aspiData`
-- `snpData`
-- `topGainers`
-- `topLooses`
-- `mostActiveTrades`
-- `allSectors`
-- `chartData`
-- `companyInfoSummery`
-- `tradeSummary`
+This is one of the most important implemented technical upgrades in the current codebase.
 
-## 7.2 Technical Analysis Service
+### 9.3 Technical Analysis Service
 
 Location:
 
@@ -374,33 +491,25 @@ Technology:
 - Pandas
 - NumPy
 
-Implemented endpoints:
+Endpoints:
 
 - `GET /health`
 - `POST /indicators/compute`
 
 Supported indicators:
 
-- RSI (14)
+- RSI
 - MACD
 - MACD signal
 - MACD histogram
-- EMA 12
-- EMA 26
+- EMA 12 / EMA 26
 - SMA 20
 - Bollinger Bands
 - ATR 14
 - VWAP
-- Stochastic K
-- Stochastic D
+- Stochastic K / D
 
-Behavior:
-
-- Accepts candle arrays
-- Computes the latest values
-- Returns a structured response plus indicator explanations
-
-## 7.3 AI Prediction Service
+### 9.4 AI Prediction Service
 
 Location:
 
@@ -413,30 +522,21 @@ Technology:
 - Pandas
 - NumPy
 
-Implemented endpoints:
+Endpoints:
 
 - `GET /health`
 - `POST /recommendations/generate`
 
 Behavior:
 
-- Accepts candles plus optional sector performance
-- Computes indicator-derived scores
-- Produces:
-  - `BUY`
-  - `SELL`
-  - `HOLD`
+- Uses explainable scoring based on RSI, MACD, and optional sector contribution
 - Returns:
+  - action
   - confidence
   - reasons
   - metrics
 
-Current logic:
-
-- Explainable rules based on RSI, MACD, and sector contribution
-- Designed as an inference API, not a full production model-serving platform yet
-
-## 7.4 Backtesting Service
+### 9.5 Backtesting Service
 
 Location:
 
@@ -447,49 +547,29 @@ Technology:
 - Python
 - FastAPI
 
-Implemented endpoints:
+Endpoints:
 
 - `GET /health`
 - `POST /backtests/run`
 
-Behavior:
+Capabilities:
 
-- Runs SMA crossover backtests
-- Accepts:
-  - stock symbol
-  - initial capital
-  - fast period
-  - slow period
-  - candles
-- Returns:
-  - backtest metrics
-  - trades
-  - equity curve
-  - strategy metadata
+- SMA crossover strategy
+- RSI reversion strategy
+- Fees
+- Slippage
+- Position sizing
+- Equity curve generation
+- Trade generation
+- Profitability metrics
 
-## 8. Event-Driven Design
-
-RabbitMQ is included for event-driven communication.
-
-Current implemented behavior:
-
-- Market-data service publishes `market.snapshot.updated`
-
-Planned extension points:
-
-- technical analysis updates
-- prediction generation events
-- alert trigger events
-- reporting events
-- portfolio update events
-
-## 9. Database Architecture
+## 10. Data and Persistence
 
 Schema file:
 
 - `infra/db/schema.sql`
 
-### PostgreSQL / TimescaleDB entities
+Main entities:
 
 - `users`
 - `stocks`
@@ -507,98 +587,101 @@ Schema file:
 - `announcements`
 - `audit_logs`
 
-### TimescaleDB hypertables
+Important current schema usage:
+
+- `users` is used for auth and profile
+- `stocks` stores quote-like market fields and sector information
+- `holdings` stores user portfolio positions and commissions
+- `watchlists` and `watchlist_items` are used by watchlist features
+- `alerts` is used by persistent alert rules
+- `historical_prices` stores market snapshots and analysis/backtesting series
+
+TimescaleDB-oriented hypertables:
 
 - `historical_prices`
 - `indicators`
 
-### Enum types
+The schema is written to work gracefully even when local PostgreSQL does not support every Timescale feature.
 
-- `user_role`
-  - `ADMIN`
-  - `TRADER`
-  - `ANALYST`
-- `alert_channel`
-  - `EMAIL`
-  - `SMS`
-  - `PUSH`
-- `alert_type`
-  - `PRICE_BREAKOUT`
-  - `RSI_OVERSOLD`
-  - `RSI_OVERBOUGHT`
-  - `VOLUME_SPIKE`
-  - `AI_BUY_SIGNAL`
-  - `AI_SELL_SIGNAL`
-- `recommendation_action`
-  - `BUY`
-  - `SELL`
-  - `HOLD`
+## 11. Event-Driven Design
 
-### Current state of DB usage
+RabbitMQ is included for asynchronous communication.
 
-- Schema is production-oriented and created during local DB bootstrap
-- The schema is not yet fully wired to all frontend and backend flows
-- Full market data ingestion to DB is still a next-stage implementation
+Currently implemented:
 
-## 10. Data Flow
+- Market-data service publishes `market.snapshot.updated`
 
-### Dashboard flow
+Planned extension points:
+
+- alert trigger workflows
+- technical indicator events
+- prediction update events
+- reporting jobs
+- portfolio update events
+
+## 12. CSE Data and Fallback Flow
+
+### Market watch flow
 
 ```text
-Frontend Dashboard
-  -> market-data-service /api/market/dashboard
-  -> CSE public API
-  -> aggregated response
-  -> frontend charts/cards
+Frontend Market Watch
+  -> market-data-service /api/market/watch
+  -> live CSE fetch
+  -> if unavailable: Redis cache
+  -> if unavailable: PostgreSQL stored market data
+  -> frontend table
 ```
 
-### Stock analysis flow
+### Quote flow
 
 ```text
-Stock Analysis Page
-  -> market-data-service /api/market/watch        (autocomplete source)
+Stock Analysis
   -> market-data-service /api/stocks/:symbol/quote
-  -> market-data-service /api/stocks/:symbol/recommendation
-  -> frontend visualization and decision UI
+  -> live company info
+  -> if unavailable: Redis quote cache
+  -> if unavailable: PostgreSQL stored quote
+  -> frontend analysis UI
+```
+
+### Historical analysis flow
+
+```text
+Stock Analysis / Backtesting
+  -> market-data-service /api/stocks/:symbol/history
+  -> PostgreSQL historical_prices
+  -> chart / strategy simulation
+```
+
+### Portfolio valuation flow
+
+```text
+Portfolio Page
+  -> portfolio holdings from PostgreSQL
+  -> quote map from market-data-service
+  -> compute cost / fees / profit / allocation
+  -> frontend investor dashboard
 ```
 
 ### Backtesting flow
 
 ```text
 Backtesting Page
+  -> historical series from market-data-service
   -> backtesting-service /backtests/run
-  -> SMA crossover engine
-  -> metrics + equity curve
-  -> frontend research view
+  -> metrics + trades + equity curve
+  -> profitability guidance + auto simulation
 ```
 
-### Indicator flow
+## 13. Deployment
 
-```text
-Client or future orchestrator
-  -> technical-analysis-service /indicators/compute
-  -> computed indicator package
-```
+### 13.1 Docker Compose
 
-### AI recommendation flow
-
-```text
-Client or future orchestrator
-  -> ai-prediction-service /recommendations/generate
-  -> explainable recommendation package
-```
-
-## 11. Deployment
-
-## 11.1 Local Docker Compose
-
-Primary runtime definition:
+Runtime file:
 
 - `docker-compose.yml`
 
-### Services started locally
+Current local runtime services:
 
-- `db`
 - `redis`
 - `rabbitmq`
 - `market-data-service`
@@ -607,26 +690,30 @@ Primary runtime definition:
 - `backtesting-service`
 - `web`
 
-### Local ports
+Important note:
 
-- Web: `5174` by default
+- PostgreSQL is expected to run on the local machine and is no longer provisioned inside Docker Compose in the current setup
+
+Typical local ports:
+
+- Web: `5174`
 - Market Data Service: `8081`
 - Technical Analysis Service: `8091`
 - AI Prediction Service: `8092`
 - Backtesting Service: `8093`
-- PostgreSQL: `5432`
 - Redis: `6379`
 - RabbitMQ: `5672`
-- RabbitMQ Management UI: `15672`
+- RabbitMQ Management: `15672`
+- PostgreSQL: local instance on `5432`
 
-### Start command
+Start command:
 
 ```bash
 cd /Users/ravendra/dev/TradingAssistant/TA
 docker compose up --build
 ```
 
-## 11.2 Kubernetes
+### 13.2 Kubernetes
 
 Manifest directory:
 
@@ -639,121 +726,176 @@ Current manifests:
 - `python-services.yaml`
 - `web.yaml`
 
-Current Kubernetes state:
+Current Kubernetes status:
 
-- Namespaced under `cse-ai`
-- Uses image placeholders for deployment targets
-- Provides basic deployment/service resources
-- Does not yet include:
-  - ingress
-  - secrets
-  - persistent volumes
-  - readiness/liveness probes
-  - production-grade autoscaling
+- deployment/service manifests for web and APIs
+- config-driven environment management via ConfigMap
+- secrets template for sensitive runtime values
+- readiness and liveness probes
+- resource requests and limits
+- ingress manifest
+- HPA manifests for key services
+- placeholder images still need replacement for real deployment targets
 
-## 11.3 CI
+### 13.3 CI
 
 Workflow:
 
 - `.github/workflows/ci.yml`
 
-Current pipeline validates:
+Current CI validates:
 
 - frontend install and build
 - market-data-service install and build
 - Python service compile checks
 - backtesting unit tests
 
-## 11.4 Production Deployment Considerations
+## 14. Technology Stack Summary
 
-Recommended target stack:
+### Frontend
 
-- AWS EKS
-- Amazon ECR
-- RDS PostgreSQL / Timescale-compatible setup
-- ElastiCache Redis
-- RabbitMQ or managed messaging
-- AWS Cognito
-- ALB Ingress
-- CloudWatch / centralized observability
+- React 19
+- TypeScript
+- Material UI
+- React Router
+- React Query
+- Redux Toolkit
+- Recharts
 
-Production hardening still needed:
+### Node backend
 
-- secrets management
-- TLS
-- ingress routing
-- persistent DB storage
-- RBAC enforcement
-- observability dashboards
-- scheduled ingestion jobs
-- retry/circuit-breaker strategy for upstream CSE failures
+- Node.js
+- Express
+- TypeScript
+- Zod
+- pg
+- redis
+- amqplib
+- bcryptjs
+- jsonwebtoken
 
-## 12. Component Behavior Summary
+### Python services
 
-### Shared behavior patterns
+- FastAPI
+- Pandas
+- NumPy
 
-- React Query is used for API-driven pages
-- Search and route-driven navigation are centralized in the shell
-- Charts are rendered with Recharts
-- Material UI provides layout and theming
-- Localized text is resolved through `I18nProvider`
+### Data / infra
 
-### UI state characteristics
+- PostgreSQL
+- TimescaleDB-oriented schema
+- Redis
+- RabbitMQ
+- Docker Compose
+- Kubernetes
+- GitHub Actions
 
-- Alerts and some analytical views still use local or mock state
-- Dashboard and market watch use live upstream-backed data
-- Stock analysis combines live lookup with derived UI visualization
-- News content is multilingual but currently mock-backed
+## 15. Current AI and Quant Features
 
-## 13. Known Gaps and Next Implementation Priorities
+Implemented AI / quant-related capabilities:
 
-The highest-value next engineering steps are:
+- explainable recommendation scoring
+- technical indicators
+- Gemini trading copilot
+- AI trade plan in stock analysis
+- AI position planner
+- AI scenario forecast
+- portfolio AI copilot
+- profit simulator
+- backtesting profitability scoring
+- backtesting smart recommendations
+- backtesting auto simulation
+- saved backtest research history
+- live news sentiment scoring and symbol extraction
 
-1. Full market ingestion from CSE into PostgreSQL/TimescaleDB
-2. Historical OHLC and company chart APIs backed by local storage
-3. Persistent user portfolio and alerts services
-4. Real news/announcement ingestion and sentiment pipeline
-5. Authentication, authorization, and audit enforcement
-6. Production-grade deployment hardening
+LLM status:
 
-## 14. Quick Reference
+- Gemini provider is integrated into runtime-aware copilot generation
+- copilot includes fallback behavior when external LLM response is unavailable
 
-### Frontend pages
+## 16. Known Gaps and Next Priorities
+
+Highest-value next implementation steps:
+
+1. Add asynchronous external broker reconciliation and webhook/fill sync
+2. Add deeper portfolio accounting using transaction-level realized P/L
+3. Add Kubernetes stateful dependency manifests and production secret management
+4. Expand alert scheduling into background workers and retry queues
+5. Extend AI copilot with journal workflows and adaptive learning from user actions
+
+## 17. Quick Reference
+
+### Key frontend pages
 
 - Dashboard
 - Full Market Watch
+- Trade Ideas
+- Watchlists
 - Stock Analysis
 - Portfolio Command
 - Risk Center
 - Alerts
 - News & Sentiment
-- Backtesting
+- Backtesting Strategy Lab
+- Profit Simulator
+- Login / Register / Profile
 
-### Core backend endpoints
+### Key backend endpoints
 
 - `GET /api/market/dashboard`
 - `GET /api/market/watch`
+- `GET /api/market/suggestions`
+- `GET /api/market/news`
 - `GET /api/stocks/:symbol/quote`
 - `GET /api/stocks/:symbol/recommendation`
+- `GET /api/stocks/:symbol/history`
+- `GET /api/stocks/:symbol/indicators`
+- `POST /api/stocks/:symbol/copilot`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `PATCH /api/auth/me`
+- `GET /api/watchlists`
+- `POST /api/watchlists`
+- `GET /api/alerts`
+- `POST /api/alerts`
+- `GET /api/alerts/deliveries`
+- `POST /api/alerts/evaluate`
+- `GET /api/portfolio`
+- `GET /api/portfolio/copilot`
+- `PUT /api/portfolio/holdings`
+- `GET /api/backtests`
+- `POST /api/backtests`
+- `GET /api/broker/account`
+- `POST /api/broker/account/link`
+- `POST /api/broker/preview`
+- `POST /api/broker/orders`
+- `GET /api/admin/users`
+- `GET /api/admin/audit-logs`
+- `POST /backtests/run`
 - `POST /indicators/compute`
 - `POST /recommendations/generate`
-- `POST /backtests/run`
 
 ### Health endpoints
 
 - `GET /health` on each backend service
 
-## 15. Summary
+## 18. Summary
 
-This repository already provides a strong multi-service foundation for a Colombo Stock Exchange intelligence platform:
+The current codebase is no longer just a UI scaffold. It is now a working multi-service CSE trading platform foundation with:
 
-- live market snapshot
-- full market watch
-- stock drill-down
-- explainable recommendation flow
-- technical indicators
-- backtesting
-- multilingual UI surfaces
-- deployment scaffolding
+- live and offline-capable market data
+- persistent user accounts
+- persistent watchlists
+- live alert evaluation and delivery logs
+- persistent portfolio holdings
+- AI-assisted stock and portfolio analysis
+- investor-grade profit and fee calculations
+- profit simulator
+- advanced backtesting with auto simulation and saved history
+- live news ingestion with sentiment scoring
+- provider-ready broker execution with paper and custom external account support
+- RBAC and audit-backed operational controls
+- multilingual enterprise UI
 
-The current codebase is best described as a production-structured platform foundation with several live working features and several deeper data-persistence and orchestration layers still pending for full production completion.
+The platform is best described as an actively implemented production-oriented foundation with several real working modules already connected end to end, and several advanced enterprise extensions still open for the next development phase.

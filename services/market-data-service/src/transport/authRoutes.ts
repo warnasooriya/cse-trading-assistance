@@ -5,6 +5,7 @@ import * as bcrypt from "bcryptjs";
 import { getAuthUserFromRequest, signAccessToken } from "../auth.js";
 import type { SignOptions } from "jsonwebtoken";
 import { env } from "../serverEnv.js";
+import { writeAuditLog } from "../services/auditService.js";
 
 type Deps = {
   pool: Pool;
@@ -34,14 +35,17 @@ export function createAuthRouter({ pool }: Deps): Router {
     try {
       const body = registerBodySchema.parse(req.body);
       const passwordHash = await bcrypt.hash(body.password, 12);
+      const count = await pool.query<{ total: string }>("SELECT COUNT(*)::text as total FROM users WHERE password_hash IS NOT NULL");
+      const isFirstUser = Number(count.rows[0]?.total ?? "0") === 0;
+      const role = isFirstUser ? "ADMIN" : "TRADER";
 
       const inserted = await pool.query<{ id: string; email: string; display_name: string | null; role: string | null; preferred_language: string | null }>(
         `
-        INSERT INTO users(email, display_name, password_hash, preferred_language)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO users(email, display_name, password_hash, preferred_language, role)
+        VALUES ($1, $2, $3, $4, $5::user_role)
         RETURNING id, email, display_name, role::text as role, preferred_language
         `,
-        [body.email.toLowerCase(), body.displayName ?? null, passwordHash, body.preferredLanguage ?? "en"]
+        [body.email.toLowerCase(), body.displayName ?? null, passwordHash, body.preferredLanguage ?? "en", role]
       );
 
       const user = inserted.rows[0]!;
@@ -56,8 +60,17 @@ export function createAuthRouter({ pool }: Deps): Router {
           id: user.id,
           email: user.email,
           displayName: user.display_name,
+          role: user.role,
           preferredLanguage: user.preferred_language ?? "en"
         }
+      });
+      await writeAuditLog({
+        pool,
+        userId: user.id,
+        action: "USER_REGISTERED",
+        entityType: "user",
+        entityId: user.id,
+        metadata: { email: user.email }
       });
     } catch (error) {
       const message = (error as Error).message;
@@ -105,8 +118,17 @@ export function createAuthRouter({ pool }: Deps): Router {
           id: user.id,
           email: user.email,
           displayName: user.display_name,
+          role: user.role,
           preferredLanguage: user.preferred_language ?? "en"
         }
+      });
+      await writeAuditLog({
+        pool,
+        userId: user.id,
+        action: "USER_LOGGED_IN",
+        entityType: "user",
+        entityId: user.id,
+        metadata: {}
       });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });
@@ -173,7 +195,16 @@ export function createAuthRouter({ pool }: Deps): Router {
         id: updated.rows[0]!.id,
         email: updated.rows[0]!.email,
         displayName: updated.rows[0]!.display_name,
+        role: authUser.role,
         preferredLanguage: updated.rows[0]!.preferred_language ?? "en"
+      });
+      await writeAuditLog({
+        pool,
+        userId: authUser.id,
+        action: "PROFILE_UPDATED",
+        entityType: "user",
+        entityId: authUser.id,
+        metadata: { displayName: body.displayName ?? null, preferredLanguage: body.preferredLanguage ?? null }
       });
     } catch (error) {
       res.status(400).json({ error: (error as Error).message });

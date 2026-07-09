@@ -1,6 +1,7 @@
 import { httpClient } from "./httpClient";
 
 const BACKTESTING_BASE_URL = import.meta.env.VITE_BACKTESTING_BASE_URL as string | undefined;
+const MARKET_DATA_BASE_URL = import.meta.env.VITE_MARKET_DATA_BASE_URL as string | undefined;
 
 export type BacktestRequest = {
   stock_symbol: string;
@@ -55,11 +56,30 @@ export type BacktestResponse = {
   }>;
 };
 
+export type SavedBacktestRun = {
+  id: string;
+  name: string;
+  parameters: Record<string, unknown>;
+  metrics: BacktestResponse["metrics"];
+  equity_curve: BacktestResponse["equity_curve"];
+  trades: BacktestResponse["trades"];
+  started_at: string;
+  ended_at: string;
+  created_at: string;
+};
+
 function requireBaseUrl(): string {
   if (!BACKTESTING_BASE_URL) {
     throw new Error("VITE_BACKTESTING_BASE_URL is not set");
   }
   return BACKTESTING_BASE_URL;
+}
+
+function requireMarketBaseUrl(): string {
+  if (!MARKET_DATA_BASE_URL) {
+    throw new Error("VITE_MARKET_DATA_BASE_URL is not set");
+  }
+  return MARKET_DATA_BASE_URL;
 }
 
 export async function runBacktest(payload: BacktestRequest): Promise<BacktestResponse> {
@@ -80,4 +100,30 @@ export async function runBacktest(payload: BacktestRequest): Promise<BacktestRes
   return (await res.json()) as BacktestResponse;
 }
 
-export const backtestingApi = { runBacktest, getJson: httpClient.getJson };
+export function fetchSavedBacktests(): Promise<SavedBacktestRun[]> {
+  return httpClient.getJson<SavedBacktestRun[]>(`${requireMarketBaseUrl()}/api/backtests`);
+}
+
+export function saveBacktestRun(payload: {
+  name: string;
+  startedAt: string;
+  endedAt: string;
+  parameters: Record<string, unknown>;
+  metrics: BacktestResponse["metrics"];
+  equityCurve: BacktestResponse["equity_curve"];
+  trades: BacktestResponse["trades"];
+}): Promise<{ id: string }> {
+  return httpClient.requestJson<{ id: string }>(`${requireMarketBaseUrl()}/api/backtests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteSavedBacktest(id: string): Promise<void> {
+  return httpClient.requestJson<void>(`${requireMarketBaseUrl()}/api/backtests/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export const backtestingApi = { runBacktest, fetchSavedBacktests, saveBacktestRun, deleteSavedBacktest, getJson: httpClient.getJson };

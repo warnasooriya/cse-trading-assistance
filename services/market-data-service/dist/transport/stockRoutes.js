@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
+import { computeIndicators } from "../services/technicalAnalysisClient.js";
+import { generateCopilotInsight } from "../services/aiCopilotService.js";
 const symbolSchema = z.string().min(1);
 function toNumber(value) {
     if (typeof value === "number" && Number.isFinite(value))
@@ -97,6 +99,11 @@ function buildRecommendation(summary) {
 const historyQuerySchema = z.object({
     range: z.enum(["1D", "1W", "1M", "3M", "6M", "1Y", "5Y"]).default("1M")
 });
+const copilotBodySchema = z
+    .object({
+    range: z.enum(["1D", "1W", "1M", "3M", "6M", "1Y", "5Y"]).default("3M")
+})
+    .default({ range: "3M" });
 function rangeToDays(range) {
     switch (range) {
         case "1D":
@@ -115,7 +122,59 @@ function rangeToDays(range) {
             return 365 * 5;
     }
 }
-export function createStockRouter({ cseClient, offlineMarketService }) {
+function mapHistoryToIndicatorCandles(items) {
+    return items
+        .filter((item) => typeof item.close === "number" && Number.isFinite(item.close))
+        .map((item, index, rows) => {
+        const prev = rows[Math.max(0, index - 1)]?.close ?? item.close;
+        const base = typeof prev === "number" ? prev : item.close;
+        const high = Math.max(base, item.close);
+        const low = Math.min(base, item.close);
+        return {
+            time: item.time,
+            open: base,
+            high,
+            low,
+            close: item.close,
+            volume: 0
+        };
+    });
+}
+async function persistIndicators(pool, symbol, timeframe, indicators) {
+    const stockRow = await pool.query("SELECT id FROM stocks WHERE symbol = $1", [symbol]);
+    const stockId = stockRow.rows[0]?.id;
+    if (!stockId)
+        return;
+    await pool.query(`
+    INSERT INTO indicators(
+      time, stock_id, timeframe, rsi, macd, macd_signal, macd_hist, ema_12, ema_26, sma_20,
+      bb_upper, bb_middle, bb_lower, atr_14, vwap, stoch_k, stoch_d
+    )
+    VALUES (
+      now(), $1, $2, $3, $4, $5, $6, $7, $8, $9,
+      $10, $11, $12, $13, $14, $15, $16
+    )
+    ON CONFLICT (stock_id, timeframe, time) DO NOTHING
+    `, [
+        stockId,
+        timeframe,
+        indicators.rsi_14 ?? null,
+        indicators.macd ?? null,
+        indicators.macd_signal ?? null,
+        indicators.macd_hist ?? null,
+        indicators.ema_12 ?? null,
+        indicators.ema_26 ?? null,
+        indicators.sma_20 ?? null,
+        indicators.bb_upper ?? null,
+        indicators.bb_middle ?? null,
+        indicators.bb_lower ?? null,
+        indicators.atr_14 ?? null,
+        indicators.vwap ?? null,
+        indicators.stoch_k ?? null,
+        indicators.stoch_d ?? null
+    ]);
+}
+export function createStockRouter({ pool, offlineMarketService }) {
     const router = Router();
     router.get("/:symbol/quote", async (req, res) => {
         try {
@@ -143,6 +202,67 @@ export function createStockRouter({ cseClient, offlineMarketService }) {
             const query = historyQuerySchema.parse(req.query);
             const items = await offlineMarketService.getHistoricalSeries(symbol, rangeToDays(query.range));
             res.json({ symbol, range: query.range, items });
+        }
+        catch (error) {
+            res.status(502).json({ error: error.message });
+        }
+    });
+    router.get("/:symbol/indicators", async (req, res) => {
+        try {
+            const symbol = symbolSchema.parse(req.params.symbol);
+            const query = historyQuerySchema.parse(req.query);
+            const history = await offlineMarketService.getHistoricalSeries(symbol, rangeToDays(query.range));
+            const candles = mapHistoryToIndicatorCandles(history);
+            if (candles.length < 20) {
+                res.status(400).json({ error: "Not enough historical data to compute indicators" });
+                return;
+            }
+            const indicators = await computeIndicators(candles);
+            await persistIndicators(pool, symbol, query.range, indicators);
+            res.json({ symbol, range: query.range, indicators });
+        }
+        catch (error) {
+            res.status(502).json({ error: error.message });
+        }
+    });
+    router.post("/:symbol/copilot", async (req, res) => {
+        try {
+            const symbol = symbolSchema.parse(req.params.symbol);
+            const body = copilotBodySchema.parse(req.body ?? {});
+            const [quoteResult, recommendationResult, history] = await Promise.all([
+                offlineMarketService.getQuoteWithFallback(symbol),
+                offlineMarketService.getRecommendationWithFallback(symbol),
+                offlineMarketService.getHistoricalSeries(symbol, rangeToDays(body.range))
+            ]);
+            const candles = mapHistoryToIndicatorCandles(history);
+            const indicators = candles.length >= 20
+                ? await computeIndicators(candles)
+                : {
+                    explanations: {}
+                };
+            if (candles.length >= 20) {
+                await persistIndicators(pool, symbol, body.range, indicators);
+            }
+            const info = quoteResult.quote.reqSymbolInfo ?? {};
+            const lastPrice = toNumber(info.lastTradedPrice);
+            const changePct = toNumber(info.changePercentage);
+            const insight = await generateCopilotInsight({
+                symbol,
+                companyName: typeof info.name === "string" ? info.name : null,
+                action: recommendationResult.action,
+                confidence: recommendationResult.confidence,
+                lastPrice,
+                changePct,
+                indicators,
+                recentCloses: history.map((item) => item.close).filter((value) => typeof value === "number")
+            });
+            res.json({
+                symbol,
+                range: body.range,
+                indicators,
+                recommendation: recommendationResult,
+                copilot: insight
+            });
         }
         catch (error) {
             res.status(502).json({ error: error.message });

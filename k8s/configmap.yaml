@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cse-ai-config
+  namespace: cse-ai
+data:
+  PORT: "8081"
+  CSE_API_BASE_URL: "https://www.cse.lk/api/"
+  RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672"
+  DATABASE_URL: "postgresql://cse_ai:cse_ai_dev@postgresql:5432/cse_ai"
+  REDIS_URL: "redis://redis:6379"
+  TECHNICAL_ANALYSIS_URL: "http://technical-analysis-service:8091"
+  MARKET_SYNC_INTERVAL_MS: "300000"
+  LOCAL_USER_EMAIL: "local@cse.ai"
+  DEFAULT_PORTFOLIO_NAME: "Primary"
+  GEMINI_MODEL: "gemini-2.5-flash"
+  PAPER_BROKER_STARTING_CASH: "1000000"
+  VITE_MARKET_DATA_BASE_URL: "http://market-data-service:8081"
+  VITE_TECHNICAL_ANALYSIS_BASE_URL: "http://technical-analysis-service:8091"
+  VITE_AI_PREDICTION_BASE_URL: "http://ai-prediction-service:8092"
+  VITE_BACKTESTING_BASE_URL: "http://backtesting-service:8093"

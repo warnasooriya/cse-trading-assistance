@@ -4,7 +4,7 @@ metadata:
   name: technical-analysis-service
   namespace: cse-ai
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: technical-analysis-service
@@ -18,6 +18,25 @@ spec:
           image: ghcr.io/example/cse-ai/technical-analysis-service:latest
           ports:
             - containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8091
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8091
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
@@ -37,7 +56,7 @@ metadata:
   name: ai-prediction-service
   namespace: cse-ai
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ai-prediction-service
@@ -51,6 +70,25 @@ spec:
           image: ghcr.io/example/cse-ai/ai-prediction-service:latest
           ports:
             - containerPort: 8092
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8092
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8092
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
 ---
 apiVersion: v1
 kind: Service
@@ -70,7 +108,7 @@ metadata:
   name: backtesting-service
   namespace: cse-ai
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: backtesting-service
@@ -84,6 +122,25 @@ spec:
           image: ghcr.io/example/cse-ai/backtesting-service:latest
           ports:
             - containerPort: 8093
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8093
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8093
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 150m
+              memory: 128Mi
+            limits:
+              cpu: 700m
+              memory: 768Mi
 ---
 apiVersion: v1
 kind: Service
@@ -96,4 +153,3 @@ spec:
   ports:
     - port: 8093
       targetPort: 8093
-
